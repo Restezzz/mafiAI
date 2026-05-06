@@ -1,0 +1,115 @@
+name: gamemaster
+
+# ============================================================
+# PRODUCTION-стек для mafia.patgen.ru.
+#
+# Архитектура: host-nginx (TLS, certbot) → frontend(80) → backend(8000) → db.
+#
+# Запуск на сервере:
+#   cp .env.prod.example .env.prod
+#   nano .env.prod          # подставь реальные секреты
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+#
+# Постгрес НЕ публикует порт наружу — доступен только из docker-сети.
+# Frontend публикуется на 127.0.0.1:8080 (не на 0.0.0.0) — слушает
+# только loopback, проксируется host-nginx'ом по HTTPS.
+# ============================================================
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: gamemaster-db-prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    # БЕЗ ports — наружу не торчит, доступна только backend'у через docker DNS.
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Логи postgres в журнале docker — ротация чтобы диск не забить
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    container_name: gamemaster-backend-prod
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      SECRET_KEY: ${SECRET_KEY}
+      APP_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # CORS: строго публичный домен, никаких localhost.
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      # Frontend log ingest можно оставить включённым — эндпоинт за auth (опционален).
+      FRONTEND_LOG_INGEST_ENABLED: "true"
+      FRONTEND_LOG_REMOTE_MIN_LEVEL: ${FRONTEND_LOG_REMOTE_MIN_LEVEL:-info}
+      # ВАЖНО: в проде observability ВЫКЛЮЧЕН (config.py упадёт если включить).
+      OBSERVABILITY_ENABLED: "false"
+      # Audio manifest монтируется read-only из repo root (см. volumes ниже).
+      AUDIO_MANIFEST_PATH: /audio_manifest.json
+      # uvicorn: 1 worker по умолчанию — игровое state в памяти, multi-worker
+      # без shared state даст рассинхрон. Масштабирование = вертикально.
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-1}
+      UVICORN_LOG_LEVEL: ${UVICORN_LOG_LEVEL:-info}
+    volumes:
+      # audio_manifest.json лежит в корне репы и нужен бэку. read-only mount.
+      - ./audio_manifest.json:/audio_manifest.json:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    # Без публикации портов — доступ только через frontend nginx upstream.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        # Эти URL «вшиваются» в JS-бандл. Single-domain → один и тот же хост.
+        REACT_APP_API_BASE_URL: ${REACT_APP_API_BASE_URL}
+        REACT_APP_WS_BASE_URL: ${REACT_APP_WS_BASE_URL}
+        REACT_APP_USE_MOCKS: "false"
+        REACT_APP_APP_ENV: production
+        REACT_APP_LOG_LEVEL: ${REACT_APP_LOG_LEVEL:-warn}
+        REACT_APP_REMOTE_LOGS_ENABLED: ${REACT_APP_REMOTE_LOGS_ENABLED:-false}
+        REACT_APP_REMOTE_LOG_MIN_LEVEL: ${REACT_APP_REMOTE_LOG_MIN_LEVEL:-warn}
+        REACT_APP_LOG_CAPTURE_CONSOLE: "false"
+    container_name: gamemaster-frontend-prod
+    restart: unless-stopped
+    ports:
+      # Публикуем только на loopback — host-nginx будет проксировать сюда.
+      # Если host-nginx нет, замени на "8080:80" (но тогда HTTP без TLS).
+      - "127.0.0.1:8080:80"
+    depends_on:
+      backend:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres_data:
+    name: gamemaster_postgres_data_prod

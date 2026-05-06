@@ -1,0 +1,13 @@
+# Production env (содержит SECRET_KEY, postgres password) — НИКОГДА не коммитим
+.env.prod
+.env.production
+.env.production.local
+
+# Dev env переопределения
+.env.local
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

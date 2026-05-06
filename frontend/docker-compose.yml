@@ -19,8 +19,11 @@ services:
       REACT_APP_REMOTE_LOG_MIN_LEVEL: debug
       REACT_APP_LOG_CAPTURE_CONSOLE: "true"
       # Polling watcher — hot reload изнутри контейнера с bind-mount.
+      # Интервал 3000мс вместо дефолтных ~100мс — резко снижает CPU на Windows/macOS
+      # ценой ~3с задержки hot-reload. true/false без числа = дефолтный агрессивный опрос.
       CHOKIDAR_USEPOLLING: "true"
-      WATCHPACK_POLLING: "true"
+      CHOKIDAR_INTERVAL: "3000"
+      WATCHPACK_POLLING: "3000"
     ports:
       - "3000:3000"
     # Bind-mount для hot reload; анонимный volume на node_modules,
