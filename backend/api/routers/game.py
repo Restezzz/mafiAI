@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy import delete as sa_delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from api.deps import get_current_user, get_db, get_player_or_404, get_session_or_404, require_host
 from core.exceptions import GameError
@@ -25,7 +26,16 @@ from models.night_action import NightAction
 from models.player import Player
 from models.role import Role
 from models.session import Session
-from services.game_engine import acknowledge_role, get_current_phase, resolve_votes, start_game, transition_to_voting
+from schemas.game import NightActionRequest, VoteRequest
+from services.game_engine import (
+    _player_target_dict,
+    acknowledge_role,
+    get_current_phase,
+    resolve_votes,
+    start_game,
+    transition_to_voting,
+)
+from services.audio_preload import clear_audio_preload
 from services.recovery_service import recover_missing_phase
 from services.runtime_state import runtime_state
 from services.timer_service import timer_service
@@ -97,7 +107,7 @@ async def ack_role(
 @router.post("/{session_id}/night-action")
 async def night_action(
     session_id: uuid.UUID,
-    payload: dict,
+    payload: NightActionRequest,
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -114,13 +124,9 @@ async def night_action(
     if not phase or phase.phase_type != "night":
         raise GameError(403, "wrong_phase", "Действие недоступно в текущей фазе")
 
-    target_player_id = payload.get("target_player_id")
-    if not target_player_id:
-        raise GameError(400, "validation_error", "target_player_id: обязательное поле")
-    try:
-        target_uuid = uuid.UUID(str(target_player_id))
-    except Exception:
-        raise GameError(400, "validation_error", "target_player_id: неверный UUID")
+    # #18: Pydantic валидирует UUID на этапе парсинга — невалидный target_player_id
+    # уйдёт 400 validation_error через RequestValidationError handler.
+    target_uuid = payload.target_player_id
 
     target = await db.get(Player, target_uuid)
     if not target or target.session_id != session_id:
@@ -282,7 +288,7 @@ async def night_action(
 @router.post("/{session_id}/vote")
 async def vote(
     session_id: uuid.UUID,
-    payload: dict,
+    payload: VoteRequest,
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -311,13 +317,9 @@ async def vote(
     if already:
         raise GameError(409, "action_already_submitted", "Вы уже сделали выбор в этой фазе")
 
-    target_player_id = payload.get("target_player_id", None)
-    target_uuid = None
-    if target_player_id is not None:
-        try:
-            target_uuid = uuid.UUID(str(target_player_id))
-        except Exception:
-            raise GameError(400, "validation_error", "target_player_id: неверный UUID")
+    # #18: Pydantic валидирует UUID, None означает «воздержался».
+    target_uuid = payload.target_player_id
+    if target_uuid is not None:
         if target_uuid == player.id:
             raise GameError(400, "invalid_target", "Нельзя голосовать за себя")
         target = await db.get(Player, target_uuid)
@@ -414,7 +416,13 @@ async def state(
     # роль игрока
     role = await db.get(Role, player.role_id) if player.role_id else None
 
-    all_players = (await db.scalars(select(Player).where(Player.session_id == session_id))).all()
+    all_players = (
+        await db.scalars(
+            select(Player)
+            .options(selectinload(Player.user))
+            .where(Player.session_id == session_id)
+        )
+    ).all()
 
     paused = session_is_paused(session.settings)
     if paused:
@@ -475,7 +483,13 @@ async def state(
             "is_blocked_tonight": is_blocked_tonight,
         },
         "players": [
-            {"id": str(p.id), "name": p.name, "status": p.status, "join_order": p.join_order}
+            {
+                "id": str(p.id),
+                "name": p.name,
+                "username": p.user.display_name if p.user else None,
+                "status": p.status,
+                "join_order": p.join_order,
+            }
             for p in sorted(all_players, key=lambda x: x.join_order)
         ],
         "awaiting_action": False,
@@ -546,31 +560,31 @@ async def state(
 
             if night_action == "kill":
                 response["available_targets"] = [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in all_players
                     if p.status == "alive" and p.id != player.id and _team_of(p) != "mafia"
                 ]
             elif night_action == "heal":
                 response["available_targets"] = [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in all_players
                     if p.status == "alive"
                 ]
             elif night_action == "check":
                 response["available_targets"] = [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in all_players
                     if p.status == "alive" and p.id != player.id
                 ]
             elif night_action == "don_check":
                 response["available_targets"] = [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in all_players
                     if p.status == "alive" and p.id != player.id and _team_of(p) != "mafia"
                 ]
             elif night_action == "lover_visit":
                 response["available_targets"] = [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in all_players
                     if p.status == "alive"
                     and p.id != player.id
@@ -578,7 +592,7 @@ async def state(
                 ]
             elif night_action == "maniac_kill":
                 response["available_targets"] = [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in all_players
                     if p.status == "alive" and p.id != player.id
                 ]
@@ -604,7 +618,7 @@ async def state(
         if player.status == "alive" and not is_voter_blocked:
             candidate_ids = set(rt.voting_candidate_ids or [])
             response["available_targets"] = [
-                {"player_id": str(p.id), "name": p.name}
+                _player_target_dict(p)
                 for p in all_players
                 if p.status == "alive"
                 and p.id != player.id
@@ -709,7 +723,7 @@ async def reset_to_lobby(
     session.status = "waiting"
     session.ended_at = None
     session.host_user_id = current_user.id  # я теперь хост
-    cur = dict(session.settings or {})
+    cur = clear_audio_preload(session.settings)
     cur.pop("game_pause", None)
     session.settings = cur
 

@@ -7,7 +7,7 @@ interface ProgressBarProps {
   className?: string;
 }
 
-export default function ProgressBar({
+function ProgressBarImpl({
   value,
   variant = 'default',
   className,
@@ -27,3 +27,6 @@ export default function ProgressBar({
     </div>
   );
 }
+
+const ProgressBar = React.memo(ProgressBarImpl);
+export default ProgressBar;

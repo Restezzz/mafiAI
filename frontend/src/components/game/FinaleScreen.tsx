@@ -150,6 +150,9 @@ export default function FinaleScreen() {
                   />
                   <div className="finale__player-info">
                     <span className="finale__player-name">{player.name}</span>
+                    {player.username && player.username !== player.name && (
+                      <span className="finale__player-nickname">{player.username}</span>
+                    )}
                     <span className={`finale__player-role ${team === 'mafia' ? 'finale__player-role--mafia' : ''}`}>
                       {displayName}
                     </span>

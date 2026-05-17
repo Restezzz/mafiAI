@@ -1,12 +1,22 @@
 .avatar {
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
+  // overflow: visible — badge может «вылезать» за круг. Внутреннее содержимое
+  // (картинка/initial/icon) обрезается в .avatar__inner с overflow: hidden.
+  overflow: visible;
   flex-shrink: 0;
-  background: linear-gradient(135deg, rgba(200, 30, 30, 0.3), rgba(200, 30, 30, 0.1));
-  transition: all 0.3s ease;
+  transition: transform 0.3s ease;
+
+  &__inner {
+    width: 100%;
+    height: 100%;
+    border-radius: inherit;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, rgba(200, 30, 30, 0.3), rgba(200, 30, 30, 0.1));
+  }
 
   &--circle {
     border-radius: 50%;
@@ -24,15 +34,15 @@
     }
   }
 
-  &--team-mafia {
+  &--team-mafia &__inner {
     background: linear-gradient(135deg, rgba(200, 30, 30, 0.35), rgba(200, 30, 30, 0.08));
   }
 
-  &--team-city {
+  &--team-city &__inner {
     background: linear-gradient(135deg, rgba(34, 197, 94, 0.3), rgba(34, 197, 94, 0.08));
   }
 
-  &--team-neutral {
+  &--team-neutral &__inner {
     background: rgba(255, 255, 255, 0.06);
   }
 
@@ -63,6 +73,8 @@
     }
   }
 
+  // Full-screen overlay — например затемнение с DeadIcon в финале.
+  // Рендерится внутри .avatar__inner, поэтому обрезается по форме аватара.
   &__overlay {
     position: absolute;
     inset: 0;
@@ -78,15 +90,22 @@
     }
   }
 
-  &--icon &__overlay {
-    background: transparent;
-    inset: auto 0 0 auto;
-    width: 32%;
-    height: 32%;
+  // Badge — мелкий значок-индикатор в правом нижнем углу (например карандаш в профиле).
+  // Лежит вне .avatar__inner, поэтому виден целиком и не обрезается circle-маской.
+  &__badge {
+    position: absolute;
+    right: -2%;
+    bottom: -2%;
+    width: 30%;
+    height: 30%;
     border-radius: 50%;
     background: #c81e1e;
     color: #ffffff;
-    box-shadow: 0 2px 8px rgba(200, 30, 30, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 8px rgba(200, 30, 30, 0.4), 0 0 0 2px var(--avatar-badge-border, #0a0a0a);
+    pointer-events: none;
 
     svg {
       width: 50%;

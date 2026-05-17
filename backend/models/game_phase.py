@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, TIMESTAMP, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, String, TIMESTAMP, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -19,6 +19,15 @@ class GamePhase(Base):
     __table_args__ = (
         UniqueConstraint("session_id", "phase_number", "phase_type", name="uq_phases_session_number_type"),
         CheckConstraint("phase_type IN ('role_reveal', 'day', 'night')", name="ck_phases_type"),
+        # Partial composite index для get_current_phase (#19): запрос
+        # WHERE session_id=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1
+        # становится O(log N) вместо seq scan'а.
+        Index(
+            "ix_game_phases_session_active",
+            "session_id",
+            text("started_at DESC"),
+            postgresql_where=text("ended_at IS NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

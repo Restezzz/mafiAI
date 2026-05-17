@@ -10,6 +10,12 @@ export interface Role {
 export interface Player {
   id: string;            // UUID (player_id)
   name: string;
+  /**
+   * Никнейм аккаунта (User.display_name) — отображается второй строкой
+   * под игровым именем в голосовании/ночных меню. Optional — бэк может
+   * вернуть null, если игрок не подгружен или деплоился старый бэк.
+   */
+  username?: string | null;
   status: 'alive' | 'dead';
   join_order: number;
 }
@@ -64,6 +70,8 @@ export interface MyPlayer {
 export interface Target {
   player_id: string;
   name: string;
+  /** Никнейм (User.display_name) — рисуется под name в меню выбора. */
+  username?: string | null;
 }
 
 export interface RoleRevealInfo {
@@ -127,6 +135,8 @@ export interface Session {
 export interface LobbyPlayer {
   id: string;
   name: string;
+  /** Никнейм аккаунта — вторая строка под игровым именем в лобби. */
+  username?: string | null;
   join_order: number;
   is_host: boolean;
 }

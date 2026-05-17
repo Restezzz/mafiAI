@@ -116,8 +116,32 @@
       cursor: not-allowed;
     }
 
+    &-info {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      flex: 1;
+      min-width: 0;
+      gap: 2px;
+    }
+
     &-name {
       flex: 1;
+      font-size: 15px;
+      font-weight: 500;
+      color: #ffffff;
+      line-height: 1.2;
+    }
+
+    &-nickname {
+      font-size: 12px;
+      font-weight: 400;
+      color: rgba(255, 255, 255, 0.4);
+      line-height: 1.2;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     &-check {
@@ -131,6 +155,7 @@
 
   &__actions {
     padding: 20px;
+    padding-bottom: 72px;
     display: flex;
     flex-direction: column;
     gap: 10px;

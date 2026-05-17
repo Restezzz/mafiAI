@@ -11,7 +11,7 @@ interface SelectableCardProps {
   className?: string;
 }
 
-export default function SelectableCard({
+function SelectableCardImpl({
   children,
   state = 'default',
   disabled = false,
@@ -42,3 +42,6 @@ export default function SelectableCard({
     </button>
   );
 }
+
+const SelectableCard = React.memo(SelectableCardImpl);
+export default SelectableCard;

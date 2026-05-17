@@ -366,7 +366,7 @@ export default function LandingPage() {
           <div className="landing-section__head-copy">
             <h2 className="landing-section__kicker">Возможности</h2>
             <p className="landing-section__title">
-              Не игра — <span className="landing-accent landing-accent--red">спектакль</span>
+              Не просто игра — <span className="landing-accent landing-accent--red">а спектакль</span>
             </p>
             <p className="landing-section__sub">
               Всё, что делает классическую Мафию атмосферной — собрано в одном месте и автоматизировано.

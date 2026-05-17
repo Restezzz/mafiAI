@@ -77,6 +77,10 @@ class SessionResponse(BaseModel):
 class PlayerInList(BaseModel):
     id: str
     name: str
+    # Никнейм аккаунта (User.display_name) — фронт показывает второй строкой
+    # под именем персонажа в лобби и игровых меню. Optional для совместимости
+    # со старыми клиентами и для путей, где user не подгружен.
+    username: str | None = None
     join_order: int
     is_host: bool
     is_me: bool = False
@@ -128,6 +132,10 @@ class RenamePlayerRequest(BaseModel):
         if not cleaned:
             raise ValueError("Имя обязательно")
         return cleaned
+
+
+class AudioPreloadReadyRequest(BaseModel):
+    manifest_version: str
 
 
 class UpdateSettingsRequest(BaseModel):

@@ -89,7 +89,7 @@ def test_nested_phase_transition():
 
 
 def _fake_player(**kwargs):
-    defaults = dict(id=uuid.uuid4(), session_id=uuid.uuid4(), user_id=uuid.uuid4(), role_id=None, status="alive", name="Player")
+    defaults = dict(id=uuid.uuid4(), session_id=uuid.uuid4(), user_id=uuid.uuid4(), role_id=None, role=None, status="alive", name="Player")
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
 
@@ -111,15 +111,12 @@ class ScalarsResult:
 @pytest.mark.asyncio
 async def test_check_win_city_wins():
     city_role = _fake_role(slug="civilian", team="city")
-    p1 = _fake_player(role_id=city_role.id, status="alive")
-    p2 = _fake_player(role_id=city_role.id, status="alive")
+    # selectinload(Player.role) подгружает role в один запрос — игроки уже имеют .role
+    p1 = _fake_player(role_id=city_role.id, role=city_role, status="alive")
+    p2 = _fake_player(role_id=city_role.id, role=city_role, status="alive")
 
     db = Mock()
-    # First scalars call: alive players; second: roles by id
-    db.scalars = AsyncMock(side_effect=[
-        ScalarsResult([p1, p2]),
-        ScalarsResult([city_role]),
-    ])
+    db.scalars = AsyncMock(return_value=ScalarsResult([p1, p2]))
 
     result = await check_win_condition(db, uuid.uuid4())
     assert result == "city"
@@ -129,14 +126,11 @@ async def test_check_win_city_wins():
 async def test_check_win_mafia_wins():
     mafia_role = _fake_role(slug="mafia", team="mafia")
     city_role = _fake_role(slug="civilian", team="city")
-    p1 = _fake_player(role_id=mafia_role.id, status="alive")
-    p2 = _fake_player(role_id=city_role.id, status="alive")
+    p1 = _fake_player(role_id=mafia_role.id, role=mafia_role, status="alive")
+    p2 = _fake_player(role_id=city_role.id, role=city_role, status="alive")
 
     db = Mock()
-    db.scalars = AsyncMock(side_effect=[
-        ScalarsResult([p1, p2]),
-        ScalarsResult([mafia_role, city_role]),
-    ])
+    db.scalars = AsyncMock(return_value=ScalarsResult([p1, p2]))
 
     result = await check_win_condition(db, uuid.uuid4())
     assert result == "mafia"
@@ -146,15 +140,12 @@ async def test_check_win_mafia_wins():
 async def test_check_win_game_continues():
     mafia_role = _fake_role(slug="mafia", team="mafia")
     city_role = _fake_role(slug="civilian", team="city")
-    p1 = _fake_player(role_id=mafia_role.id, status="alive")
-    p2 = _fake_player(role_id=city_role.id, status="alive")
-    p3 = _fake_player(role_id=city_role.id, status="alive")
+    p1 = _fake_player(role_id=mafia_role.id, role=mafia_role, status="alive")
+    p2 = _fake_player(role_id=city_role.id, role=city_role, status="alive")
+    p3 = _fake_player(role_id=city_role.id, role=city_role, status="alive")
 
     db = Mock()
-    db.scalars = AsyncMock(side_effect=[
-        ScalarsResult([p1, p2, p3]),
-        ScalarsResult([mafia_role, city_role]),
-    ])
+    db.scalars = AsyncMock(return_value=ScalarsResult([p1, p2, p3]))
 
     result = await check_win_condition(db, uuid.uuid4())
     assert result is None

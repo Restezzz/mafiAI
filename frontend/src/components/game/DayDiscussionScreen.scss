@@ -154,10 +154,30 @@
       flex-shrink: 0;
     }
 
-    &-name {
+    &-info {
       flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    &-name {
       font-size: 15px;
       color: rgba(255, 255, 255, 0.8);
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    &-nickname {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.35);
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     &-tag {

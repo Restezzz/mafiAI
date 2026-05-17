@@ -47,6 +47,31 @@ class TimerService:
         if timers:
             log_event(logger, logging.DEBUG, "timer.cancelled_all", "All timers cancelled", session_id=str(session_id), timer_count=len(timers))
 
+    async def cancel_all_sessions(self) -> int:
+        """Отменяет таймеры всех активных сессий — для graceful shutdown (#20).
+
+        Возвращает количество отменённых таймеров. Используется в @app.on_event("shutdown")
+        чтобы не оставлять висящие asyncio.Task'и при SIGTERM от kubernetes/systemd.
+        """
+        cancelled = 0
+        sessions = list(self._timers.keys())
+        for sid in sessions:
+            timers = self._timers.pop(sid, {})
+            for task in timers.values():
+                if not task.done():
+                    task.cancel()
+                    cancelled += 1
+        if cancelled:
+            log_event(
+                logger,
+                logging.INFO,
+                "timer.cancelled_all_sessions",
+                "All timers cancelled across all sessions",
+                timer_count=cancelled,
+                session_count=len(sessions),
+            )
+        return cancelled
+
     def has_timer(self, session_id: uuid.UUID, timer_name: str) -> bool:
         task = self._timers.get(session_id, {}).get(timer_name)
         return bool(task and not task.done())

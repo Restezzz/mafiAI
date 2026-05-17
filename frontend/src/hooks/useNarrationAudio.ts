@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAudioStore } from '../stores/audioStore';
 import type { Announcement, AudioSegment } from '../types/game';
+import { resolvePreloadedAudioUrl } from '../utils/audioPreloader';
+
+const HAVE_FUTURE_DATA = 3;
+const PLAYABLE_WAIT_TIMEOUT_MS = 2500;
 
 /**
  * Воспроизведение аудио озвучки для announcement, синхронизованное по
@@ -63,6 +67,7 @@ export function useNarrationAudio(announcement: Announcement | null) {
     if (!initial) return;
 
     const audio = new Audio();
+    audio.preload = 'auto';
     const audioState = useAudioStore.getState();
     audio.muted = audioState.muted;
     audio.volume = audioState.volume;
@@ -98,7 +103,7 @@ export function useNarrationAudio(announcement: Announcement | null) {
       // отзвучало по серверу).
       driftTimer = setInterval(() => {
         if (cancelled) return;
-        if (audio.paused || audio.readyState < 1 /* HAVE_METADATA */) return;
+        if (audio.paused || audio.seeking || audio.readyState < HAVE_FUTURE_DATA) return;
         const pos = pickPosition(segments, startedAtMs, Date.now());
         if (!pos) {
           stopDriftLoop();
@@ -186,11 +191,11 @@ export function useNarrationAudio(announcement: Announcement | null) {
       setCurrentSegmentIndex(idx);
       setCurrentFileName(extractFileName(segments[idx].url));
 
-      audio.src = segments[idx].url;
+      audio.src = resolvePreloadedAudioUrl(segments[idx].url);
 
       const isStale = () => cancelled || myGen !== loadGeneration;
 
-      const seekAndPlay = () => {
+      const seekAndPlay = async () => {
         if (isStale()) return;
         let offsetMs = fallbackOffsetMs;
         // Пересчитываем offset «здесь и сейчас» — за время load() могло
@@ -217,6 +222,26 @@ export function useNarrationAudio(announcement: Announcement | null) {
             audio.currentTime = offsetMs / 1000;
           } catch {
             /* noop */
+          }
+        }
+        await waitForPlayable(audio, isStale);
+        if (isStale()) return;
+        if (Number.isFinite(startedAtMs)) {
+          const pos = pickPosition(segments, startedAtMs, Date.now());
+          if (pos && pos.index === idx) {
+            offsetMs = pos.offsetMs;
+            try {
+              audio.currentTime = offsetMs / 1000;
+            } catch {
+              /* noop */
+            }
+          } else if (pos && pos.index !== idx) {
+            playFrom(pos.index, pos.offsetMs);
+            return;
+          } else if (!pos) {
+            setCurrentSegmentIndex(-1);
+            setCurrentFileName(null);
+            return;
           }
         }
         const playPromise = audio.play();
@@ -338,6 +363,38 @@ function resolveSegments(a: Announcement): AudioSegment[] {
     return [{ url: a.audio_url, duration_ms: a.duration_ms }];
   }
   return [];
+}
+
+function waitForPlayable(audio: HTMLAudioElement, isStale: () => boolean): Promise<void> {
+  if (isStale() || audio.readyState >= HAVE_FUTURE_DATA) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const finish = () => {
+      audio.removeEventListener('canplay', finish);
+      audio.removeEventListener('canplaythrough', finish);
+      audio.removeEventListener('loadeddata', finish);
+      audio.removeEventListener('progress', onProgress);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      resolve();
+    };
+    const onProgress = () => {
+      if (isStale() || audio.readyState >= HAVE_FUTURE_DATA) {
+        finish();
+      }
+    };
+
+    audio.addEventListener('canplay', finish, { once: true });
+    audio.addEventListener('canplaythrough', finish, { once: true });
+    audio.addEventListener('loadeddata', finish, { once: true });
+    audio.addEventListener('progress', onProgress);
+    timeoutId = setTimeout(finish, PLAYABLE_WAIT_TIMEOUT_MS);
+  });
 }
 
 function extractFileName(url: string): string {

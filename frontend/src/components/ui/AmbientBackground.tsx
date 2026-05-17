@@ -15,7 +15,7 @@ interface AmbientBackgroundProps {
   className?: string;
 }
 
-export default function AmbientBackground({
+function AmbientBackgroundImpl({
   variant,
   blobs = 0,
   className,
@@ -37,3 +37,6 @@ export default function AmbientBackground({
     </>
   );
 }
+
+const AmbientBackground = React.memo(AmbientBackgroundImpl);
+export default AmbientBackground;

@@ -15,6 +15,7 @@ import SubscriptionPlanCard from '../components/profile/SubscriptionPlanCard';
 import PasswordChangeForm from '../components/profile/PasswordChangeForm';
 import { logger } from '../services/logger';
 import { usePageViewLogger } from '../hooks/usePageViewLogger';
+import { compressAvatar } from '../utils/compressAvatar';
 import './ProfilePage.scss';
 
 const UserIcon = () => (
@@ -37,7 +38,10 @@ export default function ProfilePage() {
   const setUser = useAuthStore((s) => s.setUser);
   const logout = useAuthStore((s) => s.logout);
 
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  // Аватарка тянется из user.avatar_url — store обновляется при PUT /me/avatar.
+  const avatarUrl = user?.avatar_url ?? null;
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const [avatarError, setAvatarError] = useState('');
 
   // Подписка
   const [subscription, setSubscription] = useState<SubscriptionStatusResponse | null>(null);
@@ -78,17 +82,30 @@ export default function ProfilePage() {
   }, []);
 
   const handleAvatarClick = () => {
+    if (avatarUploading) return;
     fileInputRef.current?.click();
   };
 
-  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        setAvatarUrl(ev.target?.result as string);
-      };
-      reader.readAsDataURL(file);
+    // Сбрасываем input, чтобы повторный выбор того же файла снова триггерил onChange.
+    e.target.value = '';
+    if (!file) return;
+
+    setAvatarError('');
+    setAvatarUploading(true);
+    try {
+      const dataUrl = await compressAvatar(file, { size: 256, quality: 0.85 });
+      const { data } = await authApi.updateAvatar({ avatar_data_url: dataUrl });
+      setUser(data);
+      logger.info('profile.avatar_updated', 'Avatar updated', { userId: data.user_id }, { userId: data.user_id });
+    } catch (err) {
+      logger.warn('api.nonfatal_failure', 'Failed to update avatar', {
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      setAvatarError(getApiErrorMessage(err));
+    } finally {
+      setAvatarUploading(false);
     }
   };
 
@@ -164,8 +181,7 @@ export default function ProfilePage() {
             size={100}
             src={avatarUrl ?? undefined}
             icon={<UserIcon />}
-            overlay={<EditIcon />}
-            onClick={handleAvatarClick}
+            badge={<EditIcon />}
             className="profile-avatar"
             ariaLabel="Аватар"
           />
@@ -176,7 +192,10 @@ export default function ProfilePage() {
             accept="image/*"
             style={{ display: 'none' }}
           />
-          <p className="profile-avatar__hint">Нажмите, чтобы изменить аватар</p>
+          <p className="profile-avatar__hint">
+            {avatarUploading ? 'Загрузка...' : 'Нажмите, чтобы изменить аватар'}
+          </p>
+          {avatarError && <p className="profile-avatar__error">{avatarError}</p>}
         </div>
 
         {/* Nickname Section */}

@@ -120,7 +120,7 @@ async def get_session_by_code(
 ) -> SessionDetailResponse:
     session = await db.scalar(
         select(Session)
-        .options(selectinload(Session.players))
+        .options(selectinload(Session.players).selectinload(Player.user))
         .where(Session.code == code)
     )
     if session is None:
@@ -212,6 +212,7 @@ async def join_session(
             "payload": {
                 "id": str(player.id),
                 "name": player.name,
+                "username": current_user.display_name,
                 "join_order": join_order,
                 "is_host": False,
             },

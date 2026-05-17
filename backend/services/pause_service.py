@@ -56,6 +56,12 @@ async def pause_game(db: AsyncSession, session: Session) -> dict:
     # a race where a timer callback fires during the commit and triggers
     # a phase transition before we've saved the pause snapshot.
     rt.game_paused = True
+    # События для прерываемого ожидания в _wait_or_pause (#9):
+    # pause_event.set() будит любой текущий wait_for(...) в фазе;
+    # resume_event.clear() — следующая итерация цикла _wait_or_pause увидит paused
+    # и заблокируется на resume_event.wait() пока не сделают resume_game.
+    rt.pause_event.set()
+    rt.resume_event.clear()
     await timer_service.cancel_all(session.id)
     rt.night_action_event.set()
 
@@ -99,6 +105,10 @@ async def resume_game(session_id: uuid.UUID) -> None:
 
     rt = runtime_state.get(session_id)
     rt.game_paused = False
+    # Симметрично pause_game (#9): сбрасываем pause_event и поднимаем resume_event,
+    # чтобы _wait_or_pause продолжил счёт оставшегося времени фазы.
+    rt.pause_event.clear()
+    rt.resume_event.set()
     rt.night_sequence_abort = False
 
     ptype = snap.get("phase_type")

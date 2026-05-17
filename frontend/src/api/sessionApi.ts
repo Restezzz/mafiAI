@@ -8,6 +8,8 @@ import type {
   UpdateSettingsRequest,
   UpdateSettingsResponse,
   PlayerInList,
+  AudioPreloadReadyRequest,
+  AudioPreloadStatusResponse,
 } from '../types/api';
 
 export const sessionApi = {
@@ -34,6 +36,12 @@ export const sessionApi = {
 
   beginStory: (sessionId: string) =>
     httpClient.post<{ ok: boolean }>(`/sessions/${sessionId}/begin-story`),
+
+  getAudioPreloadStatus: (sessionId: string) =>
+    httpClient.get<AudioPreloadStatusResponse>(`/sessions/${sessionId}/audio-preload`),
+
+  markAudioPreloadReady: (sessionId: string, data: AudioPreloadReadyRequest) =>
+    httpClient.post<AudioPreloadStatusResponse>(`/sessions/${sessionId}/audio-preload-ready`, data),
 
   kick: (sessionId: string, playerId: string, confirm?: boolean) =>
     httpClient.delete(`/sessions/${sessionId}/players/${playerId}`, {

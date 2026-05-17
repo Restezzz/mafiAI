@@ -4,32 +4,92 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
 from core.config import settings
 from core.exceptions import GameError, game_error_handler
 from core.logging import configure_logging, log_event, log_exception
 from core.logging_middleware import RequestContextLoggingMiddleware
+from core.rate_limit import limiter, rate_limit_exceeded_handler
 from services.recovery_service import recovery_loop
 from services.role_catalog import ensure_role_catalog
+from services.timer_service import timer_service
 
 
 configure_logging(settings.APP_ENV, settings.LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 
-app = FastAPI(title="AI-GameMaster")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Жизненный цикл приложения (#20).
+
+    Заменяет deprecated `@app.on_event("startup"/"shutdown")` единым контекстным
+    менеджером. На startup поднимаем role catalog + recovery loop. На shutdown
+    отменяем все таймеры и recovery, ждём корректного завершения.
+
+    Без этого SIGTERM от kubernetes/systemd убивает воркер uvicorn принудительно
+    через 30s timeout: висящие asyncio.sleep() в timer_service бросают
+    CancelledError, callback'и могут не успеть откатиться → коррапт state.
+    """
+    await ensure_role_catalog()
+    recovery_task = asyncio.create_task(recovery_loop())
+    log_event(logger, logging.INFO, "app.started", "Backend startup completed", app_env=settings.APP_ENV)
+
+    try:
+        yield
+    finally:
+        # 1. Останавливаем recovery, чтобы не пересоздавал таймеры в момент shutdown'а.
+        recovery_task.cancel()
+        try:
+            await recovery_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            log_exception(logger, "app.shutdown.recovery_failed", "Recovery loop raised on shutdown")
+        # 2. Отменяем все игровые таймеры (asyncio.sleep + callback'и).
+        cancelled = await timer_service.cancel_all_sessions()
+        log_event(
+            logger,
+            logging.INFO,
+            "app.stopped",
+            "Backend graceful shutdown completed",
+            timers_cancelled=cancelled,
+        )
+
+
+app = FastAPI(title="AI-GameMaster", lifespan=lifespan)
+
+# Rate limiter: ставим до CORS и логирования, чтобы 429 уходил без полной обработки.
+# Лимиты per-route задаются декоратором @limiter.limit(...) в роутерах.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Явный whitelist: с credentials=True wildcards в CORS считаются плохой
+    # практикой даже когда CORSMiddleware их допускает. Открытый * заголовка
+    # лишний раз светит surface поверх того, что нужно.
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Accept",
+        "X-Request-ID",
+        "X-Client-Request-ID",
+    ],
+    expose_headers=["X-Request-ID"],
 )
 app.add_middleware(RequestContextLoggingMiddleware)
 
@@ -102,15 +162,6 @@ app.include_router(subscriptions_router, prefix="/api/subscriptions", tags=["sub
 app.include_router(ws_router, prefix="/ws", tags=["ws"])
 if settings.APP_ENV == "development":
     app.include_router(dev_router, prefix="/api/dev", tags=["dev"])
-
-
-@app.on_event("startup")
-async def _startup_recovery():
-    # Справочник ролей должен существовать до любых игровых действий и recovery.
-    await ensure_role_catalog()
-    # Продакшн-режим: поднимаем фоновый recovery, который продолжает активные игры
-    asyncio.create_task(recovery_loop())
-    log_event(logger, logging.INFO, "app.started", "Backend startup completed", app_env=settings.APP_ENV)
 
 
 @app.get("/")

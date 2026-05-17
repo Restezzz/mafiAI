@@ -24,4 +24,9 @@ class RefreshToken(Base):
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
     )
+    # Soft-revoke: токен помечается использованным/отозванным; при попытке reuse такого
+    # токена все остальные активные токены пользователя инвалидируются (защита от угона).
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
 

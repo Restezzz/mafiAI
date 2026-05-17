@@ -120,6 +120,7 @@
       width: 36px;
       height: 36px;
       color: #c81e1e;
+      filter: drop-shadow(0 0 10px rgba(200, 30, 30, 0.4));
       animation: narrator-icon-glow 2s ease infinite;
     }
 
@@ -150,10 +151,10 @@
 
 @keyframes narrator-icon-glow {
   0%, 100% {
-    box-shadow: 0 0 20px rgba(200, 30, 30, 0.2);
+    filter: drop-shadow(0 0 10px rgba(200, 30, 30, 0.2));
   }
   50% {
-    box-shadow: 0 0 40px rgba(200, 30, 30, 0.4);
+    filter: drop-shadow(0 0 20px rgba(200, 30, 30, 0.5));
   }
 }
 

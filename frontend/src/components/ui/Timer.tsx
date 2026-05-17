@@ -9,7 +9,7 @@ interface TimerProps {
   className?: string;
 }
 
-export default function Timer({
+function TimerImpl({
   seconds,
   dangerThreshold = 10,
   variant = 'default',
@@ -27,3 +27,6 @@ export default function Timer({
 
   return <span className={classes}>{formatMmSs(seconds)}</span>;
 }
+
+const Timer = React.memo(TimerImpl);
+export default Timer;

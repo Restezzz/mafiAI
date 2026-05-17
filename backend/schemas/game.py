@@ -1,12 +1,28 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+import uuid
+
+from pydantic import BaseModel, ConfigDict
 
 
 class NightActionRequest(BaseModel):
-    target_player_id: str
+    """Тело запроса POST /sessions/{id}/night-action (#18).
+
+    target_player_id парсится в UUID на этапе валидации Pydantic'ом.
+    Невалидный UUID или отсутствующее поле -> 400 validation_error
+    через RequestValidationError handler.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    target_player_id: uuid.UUID
 
 
 class VoteRequest(BaseModel):
-    target_player_id: str | None = None
+    """Тело запроса POST /sessions/{id}/vote (#18).
+
+    target_player_id опционален — null означает воздержался.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    target_player_id: uuid.UUID | None = None
 

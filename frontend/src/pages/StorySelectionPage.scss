@@ -351,6 +351,9 @@
     }
   }
 
+  // Старые .story-name-pick__audio* стили остались под .story-audio.
+  // Хранятся здесь как заглушка на случай миграции, но не используются.
+
   &__grid {
     display: flex;
     flex-direction: column;
@@ -479,10 +482,30 @@
       background: rgba(200, 30, 30, 0.05);
     }
 
-    &-name {
+    &-info {
       flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    &-name {
       font-size: 14px;
-      color: rgba(255, 255, 255, 0.8);
+      color: rgba(255, 255, 255, 0.85);
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    &-nickname {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.4);
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     &-tag {
@@ -500,7 +523,184 @@
         color: #ff8888;
       }
     }
+
+    // ─── Бейдж готовности озвучки рядом с именем игрока. Зелёная галочка
+    //     если игрок отправил markAudioPreloadReady, иначе серый spinner.
+    &-ready {
+      width: 22px;
+      height: 22px;
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      font-size: 11px;
+      transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+
+      svg {
+        width: 12px;
+        height: 12px;
+      }
+
+      &--ok {
+        background: rgba(46, 160, 67, 0.18);
+        border: 1px solid rgba(46, 160, 67, 0.45);
+        color: #4ade80;
+      }
+
+      &--wait {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.10);
+      }
+    }
+
+    &-spinner {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      border: 1.5px solid rgba(255, 255, 255, 0.18);
+      border-top-color: rgba(255, 255, 255, 0.7);
+      animation: story-audio-spin 0.9s linear infinite;
+    }
   }
+}
+
+// ─── Карточка статуса загрузки озвучки (loading / waiting / ready / error).
+.story-audio {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: background 0.3s ease, border-color 0.3s ease;
+
+  &__icon {
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.65);
+
+    svg {
+      width: 18px;
+      height: 18px;
+    }
+  }
+
+  &__body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  &__title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #ffffff;
+    line-height: 1.3;
+  }
+
+  &__subtitle {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.55);
+    line-height: 1.45;
+  }
+
+  &__track {
+    height: 6px;
+    margin-top: 8px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+
+    span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      transition: width 0.35s ease;
+    }
+  }
+
+  &__meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 6px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.55);
+    font-variant-numeric: tabular-nums;
+  }
+
+  // ── State: грузим аудио у себя локально.
+  &--loading {
+    border-color: rgba(200, 30, 30, 0.25);
+    background: rgba(200, 30, 30, 0.05);
+
+    .story-audio__icon {
+      background: rgba(200, 30, 30, 0.18);
+      color: #ffaaaa;
+      animation: story-audio-pulse 1.6s ease-in-out infinite;
+    }
+
+    .story-audio__track span {
+      background: linear-gradient(90deg, #c81e1e, #ff4444);
+    }
+  }
+
+  // ── State: мы готовы, но кто-то ещё качает.
+  &--waiting {
+    border-color: rgba(255, 196, 0, 0.22);
+    background: rgba(255, 196, 0, 0.04);
+
+    .story-audio__icon {
+      background: rgba(255, 196, 0, 0.16);
+      color: #ffdd66;
+      animation: story-audio-pulse 1.8s ease-in-out infinite;
+    }
+
+    .story-audio__track span {
+      background: linear-gradient(90deg, #d4a017, #ffd84d);
+    }
+  }
+
+  // ── State: все готовы.
+  &--ready {
+    border-color: rgba(46, 160, 67, 0.35);
+    background: rgba(46, 160, 67, 0.08);
+
+    .story-audio__icon {
+      background: rgba(46, 160, 67, 0.22);
+      color: #5ee18a;
+    }
+  }
+
+  // ── State: ошибка локальной загрузки.
+  &--error {
+    border-color: rgba(255, 68, 68, 0.4);
+    background: rgba(255, 68, 68, 0.07);
+
+    .story-audio__icon {
+      background: rgba(255, 68, 68, 0.2);
+      color: #ff7878;
+    }
+  }
+}
+
+@keyframes story-audio-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(0.92); opacity: 0.78; }
+}
+
+@keyframes story-audio-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* ===== Detail Modal ===== */

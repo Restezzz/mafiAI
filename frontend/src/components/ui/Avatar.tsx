@@ -8,14 +8,17 @@ interface AvatarProps {
   icon?: React.ReactNode;
   size?: number;
   shape?: 'circle' | 'rounded';
+  /** Full-screen затемнение поверх аватарки (например DeadIcon в финале). */
   overlay?: React.ReactNode;
+  /** Мелкий значок-индикатор в правом нижнем углу (например карандаш-edit в профиле). */
+  badge?: React.ReactNode;
   team?: 'mafia' | 'city' | 'neutral';
   onClick?: () => void;
   className?: string;
   ariaLabel?: string;
 }
 
-export default function Avatar({
+function AvatarImpl({
   variant,
   name,
   src,
@@ -23,6 +26,7 @@ export default function Avatar({
   size = 40,
   shape = 'circle',
   overlay,
+  badge,
   team,
   onClick,
   className,
@@ -50,12 +54,18 @@ export default function Avatar({
       tabIndex={onClick ? 0 : undefined}
       aria-label={ariaLabel ?? name}
     >
-      {variant === 'initial' && <span className="avatar__initial">{initial}</span>}
-      {variant === 'image' && src && (
-        <img src={src} alt={ariaLabel ?? name ?? ''} className="avatar__image" />
-      )}
-      {variant === 'icon' && <span className="avatar__icon">{icon}</span>}
-      {overlay && <span className="avatar__overlay">{overlay}</span>}
+      <div className="avatar__inner">
+        {variant === 'initial' && <span className="avatar__initial">{initial}</span>}
+        {variant === 'image' && src && (
+          <img src={src} alt={ariaLabel ?? name ?? ''} className="avatar__image" />
+        )}
+        {variant === 'icon' && <span className="avatar__icon">{icon}</span>}
+        {overlay && <span className="avatar__overlay">{overlay}</span>}
+      </div>
+      {badge && <span className="avatar__badge">{badge}</span>}
     </div>
   );
 }
+
+const Avatar = React.memo(AvatarImpl);
+export default Avatar;

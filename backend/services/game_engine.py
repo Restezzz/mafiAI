@@ -45,6 +45,7 @@ from services.narration_script import (
 )
 from services.narration_audio import resolve_steps
 from services.audio_manifest import get_manifest as get_audio_manifest
+from services.audio_preload import ensure_audio_preload_ready
 from services.timer_service import timer_service
 from services.runtime_state import runtime_state
 from services.ws_manager import ws_manager
@@ -54,6 +55,92 @@ logger = logging.getLogger(__name__)
 
 def _role_config(session: Session) -> dict:
     return (session.settings or {}).get("role_config") or {}
+
+
+def _player_target_dict(p: Player) -> dict:
+    """Сериализация игрока для available_targets / *_eliminated WS-событий.
+
+    Возвращает payload вида ``{player_id, name, username}``, где ``username`` —
+    это никнейм аккаунта (``User.display_name``). Фронт показывает его второй
+    строкой под именем персонажа в меню голосования и ночных ролей.
+
+    Требует, чтобы ``Player`` был загружен с ``selectinload(Player.user)``.
+    Иначе обращение к ``p.user`` сделает ленивый sync-запрос и упадёт в
+    async-контексте (``MissingGreenlet``).
+    """
+    user = getattr(p, "user", None)
+    return {
+        "player_id": str(p.id),
+        "name": p.name,
+        "username": user.display_name if user is not None else None,
+    }
+
+
+async def _autofill_unselected_names(
+    db: AsyncSession,
+    session: Session,
+    players: list[Player],
+) -> list[Player]:
+    """Назначает рандомное озвученное имя игрокам, не выбравшим имя из манифеста.
+
+    Сценарии срабатывания:
+
+    * Игрок не успел нажать кнопку имени за отведённый таймер ``name-pick``-фазы
+      — у него остаётся плейсхолдерное имя из лобби (``"Игрок 3"``), которого
+      нет в озвучке. Без авто-замены ведущий не сможет произнести имя в
+      ночных/дневных нарративах.
+    * Dev-test ``боты`` создаются с именами вида ``"Игрок 2"`` и не имеют
+      открытой вкладки, чтобы выбрать имя самостоятельно.
+
+    Список свободных имён формируется как ``manifest.display_names() − {имена,
+    которые уже выбрали другие игроки и которые валидны}``. Имена раздаются
+    случайно, чтобы не давать ботам всегда первые позиции из манифеста.
+
+    Возвращает список игроков, которым было назначено новое имя — caller
+    должен закоммитить транзакцию и отправить им WS ``player_renamed``.
+    """
+    allowed = set(get_audio_manifest().display_names())
+    if not allowed:
+        return []
+
+    taken = {p.name for p in players if p.name in allowed}
+    needs_rename = [p for p in players if p.name not in allowed]
+    if not needs_rename:
+        return []
+
+    available = [n for n in allowed if n not in taken]
+    random.shuffle(available)
+
+    changed: list[Player] = []
+    for p in needs_rename:
+        if not available:
+            # Манифест содержит ~20 имён; для нормальных партий ветка
+            # недостижима. Защищаемся, чтобы не упасть на edge-кейсе.
+            break
+        new_name = available.pop()
+        old_name = p.name
+        p.name = new_name
+        db.add(
+            GameEvent(
+                id=uuid.uuid4(),
+                session_id=session.id,
+                phase_id=None,
+                event_type="player_renamed",
+                payload={"player_id": str(p.id), "name": new_name, "auto": True},
+            )
+        )
+        changed.append(p)
+        log_event(
+            logger,
+            logging.INFO,
+            "session.player_auto_renamed",
+            "Player auto-renamed at game start",
+            session_id=str(session.id),
+            player_id=str(p.id),
+            old_name=old_name,
+            new_name=new_name,
+        )
+    return changed
 
 
 def _begin_phase_transition(session_id: uuid.UUID) -> None:
@@ -83,16 +170,35 @@ def _is_turn_enabled(session: Session, turn_slug: str) -> bool:
 
 
 async def _wait_or_pause(session_id: uuid.UUID, seconds: float) -> None:
+    """Ждать `seconds` секунд, учитывая паузу игры.
+
+    Контракт:
+    - Если игра НЕ на паузе — спим до истечения времени, прерываясь при наступлении паузы.
+    - Если игра на паузе — ждём `resume_event.set()` и продолжаем счёт.
+    - Время "съеденное" паузой НЕ считается за основу: возвращаемся только когда
+      набрано суммарно `seconds` РЕАЛЬНОГО времени без паузы.
+
+    Раньше polling'или флаг каждые 200ms; теперь `asyncio.wait_for` спит без CPU
+    и просыпается мгновенно как только pause/resume событие set'ится.
+    """
     rt = runtime_state.get(session_id)
-    deadline = asyncio.get_running_loop().time() + seconds
-    while True:
+    loop = asyncio.get_running_loop()
+    remaining = float(seconds)
+    while remaining > 0:
+        # На паузе — ждём ресум перед тем как считать оставшееся время.
         if rt.game_paused:
-            await asyncio.sleep(0.2)
-            continue
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
+            await rt.resume_event.wait()
+        # Прерываемый sleep: возвращается либо по таймауту (тогда отсчёт закончен),
+        # либо если кто-то set'нул pause_event (тогда продолжаем с уменьшенным remaining).
+        start = loop.time()
+        try:
+            await asyncio.wait_for(rt.pause_event.wait(), timeout=remaining)
+            # Сюда пришли только если пауза наступила. Уменьшаем remaining на
+            # фактическое время сна и идём на следующую итерацию (там await resume).
+            remaining -= loop.time() - start
+        except asyncio.TimeoutError:
+            # Дошли до конца без паузы.
             return
-        await asyncio.sleep(min(0.2, remaining))
 
 
 def _stamp_started_at(announcement: dict | None, ts=None) -> dict | None:
@@ -189,22 +295,79 @@ async def _play_phase_announcements(
     persist: bool = False,
     target_player_name: str | None = None,
 ) -> None:
+    """Прокручивает announcement'ы фазы.
+
+    #8: раньше каждый announcement делал отдельный commit (для 5-шаговой фазы —
+    5 round-trip'ов в БД). Теперь WS-сообщения отправляются сразу, а GameEvent'ы
+    копятся и пишутся одним commit'ом в конце цикла.
+
+    Trade-off: если backend упадёт между WS-сообщением и финальным commit'ом,
+    /state у переподключившегося клиента покажет более ранний announcement
+    (последний committed). Клиент быстро догонит из следующего phase_changed —
+    допустимое compromise за -80% latency на старте каждой фазы.
+    """
     target_gender = _gender_for_name(target_player_name)
     enriched = resolve_steps(
         steps,
         target_player_name=target_player_name,
         target_player_gender=target_gender,
     )
+    should_persist = persist and db is not None and phase_id is not None
+    pending_events: list[GameEvent] = []
     for announcement in enriched:
-        await _emit_phase_changed(
-            session_id,
-            {**phase_payload, "announcement": announcement},
-            db=db,
-            phase_id=phase_id,
-            persist=persist and db is not None and phase_id is not None,
-        )
+        full_payload = {**phase_payload, "announcement": announcement}
+        # Эмитим WS без commit'а — persist=False даже если общий флаг True.
+        # Сам phase_changed-event добавим в pending_events ниже после возможного
+        # stamp'а started_at (он делается внутри _emit_phase_changed).
+        emitted_payload = await _emit_phase_changed_for_batch(session_id, full_payload)
+        if should_persist:
+            pending_events.append(
+                GameEvent(
+                    id=uuid.uuid4(),
+                    session_id=session_id,
+                    phase_id=phase_id,
+                    event_type="phase_changed",
+                    payload=emitted_payload,
+                )
+            )
         await _wait_or_pause(session_id, _wait_seconds_for(announcement))
+    # ONE commit вместо N — главное ускорение #8.
+    if pending_events and db is not None:
+        db.add_all(pending_events)
+        await db.commit()
     await _set_runtime_announcement(session_id, None)
+
+
+async def _emit_phase_changed_for_batch(
+    session_id: uuid.UUID,
+    payload: dict,
+) -> dict:
+    """Версия `_emit_phase_changed` без db.commit() — для batch-режима в #8.
+
+    Делает то же что и `_emit_phase_changed(... persist=False)`: трансформирует
+    payload (стамп started_at, обновление runtime announcement), отправляет WS,
+    логирует. Возвращает трансформированный payload, чтобы вызывающий мог
+    собрать GameEvent для batch INSERT'а.
+    """
+    announcement = payload.get("announcement")
+    is_blocking = bool(announcement and announcement.get("blocking", True))
+    stamped = await _set_runtime_announcement(session_id, announcement if is_blocking else None)
+    if announcement and not is_blocking:
+        stamped = _stamp_started_at(announcement)
+    if stamped is not None:
+        payload = {**payload, "announcement": stamped}
+    log_event(
+        logger,
+        logging.INFO,
+        "phase.changed",
+        "Game phase changed",
+        session_id=str(session_id),
+        phase=payload.get("phase"),
+        sub_phase=payload.get("sub_phase"),
+        night_turn=payload.get("night_turn"),
+    )
+    await ws_manager.send_to_session(session_id, {"type": "phase_changed", "payload": payload})
+    return payload
 
 
 async def _persist_phase_changed(
@@ -242,19 +405,25 @@ async def check_win_condition(db: AsyncSession, session_id: uuid.UUID) -> str | 
       2. Мафия: маньяков нет, живой мафии >= живого города.
       3. Город: нет ни мафии, ни маньяков.
       Иначе — игра продолжается.
+
+    #24: используем selectinload(Player.role) чтобы получить и игроков и их роли
+    одним запросом (раньше было два: alive players + roles по in_(...)).
     """
-    alive = (await db.scalars(select(Player).where(Player.session_id == session_id, Player.status == "alive"))).all()
+    alive = (
+        await db.scalars(
+            select(Player)
+            .options(selectinload(Player.role))
+            .where(Player.session_id == session_id, Player.status == "alive")
+        )
+    ).all()
     if not alive:
         return None
-    role_ids = {p.role_id for p in alive if p.role_id is not None}
-    if not role_ids:
+    if all(p.role_id is None for p in alive):
         return None
-    roles = (await db.scalars(select(Role).where(Role.id.in_(role_ids)))).all()
-    role_by_id = {r.id: r for r in roles}
 
-    alive_mafia = sum(1 for p in alive if p.role_id and role_by_id[p.role_id].team == "mafia")
-    alive_city = sum(1 for p in alive if p.role_id and role_by_id[p.role_id].team == "city")
-    alive_maniac = sum(1 for p in alive if p.role_id and role_by_id[p.role_id].team == "maniac")
+    alive_mafia = sum(1 for p in alive if p.role and p.role.team == "mafia")
+    alive_city = sum(1 for p in alive if p.role and p.role.team == "city")
+    alive_maniac = sum(1 for p in alive if p.role and p.role.team == "maniac")
 
     # Маньяк остался в живых один против одного (или меньше).
     if alive_maniac == 1 and (alive_city + alive_mafia) <= 1:
@@ -272,8 +441,16 @@ async def check_win_condition(db: AsyncSession, session_id: uuid.UUID) -> str | 
 async def start_game(db: AsyncSession, session: Session) -> None:
     if session.status != "waiting":
         raise GameError(409, "game_already_started", "Игра уже началась")
+    await ensure_audio_preload_ready(db, session)
 
-    players = (await db.scalars(select(Player).where(Player.session_id == session.id))).all()
+    players = list(
+        (await db.scalars(select(Player).where(Player.session_id == session.id))).all()
+    )
+    # Кто не успел выбрать имя за таймер story-страницы (или dev-test бот без
+    # вкладки) — получает рандомное имя из ещё не разобранных в манифесте,
+    # чтобы озвучка нашла аудиофайл для его имени. WS-уведомления отправляем
+    # после commit.
+    auto_renamed = await _autofill_unselected_names(db, session, players)
     role_cfg = (session.settings or {}).get("role_config") or {}
     mafia = int(role_cfg.get("mafia", 0))
     don = int(role_cfg.get("don", 0))
@@ -343,6 +520,17 @@ async def start_game(db: AsyncSession, session: Session) -> None:
         player_count=len(players),
     )
 
+    # Сначала шлём авто-rename, чтобы фронт обновил имена игроков
+    # ДО прихода game_started/role_assigned/phase_changed.
+    for p in auto_renamed:
+        await ws_manager.send_to_session(
+            session.id,
+            {
+                "type": "player_renamed",
+                "payload": {"player_id": str(p.id), "name": p.name, "auto": True},
+            },
+        )
+
     timer_seconds = int((session.settings or {}).get("role_reveal_timer_seconds") or 15)
     rt = runtime_state.get(session.id)
     rt.timer_name = "role_reveal"
@@ -396,17 +584,10 @@ async def acknowledge_role(db: AsyncSession, session: Session, player: Player) -
     if player.status != "alive":
         raise GameError(403, "player_dead", "Выбывшие игроки не могут совершать действия")
 
-    existing_ack = await db.scalar(
-        select(GameEvent.id).where(
-            GameEvent.session_id == session.id,
-            GameEvent.phase_id == phase.id,
-            GameEvent.event_type == "role_acknowledged",
-            GameEvent.payload["player_id"].astext == str(player.id),
-        )
-    )
-    if existing_ack:
-        raise GameError(409, "action_already_submitted", "Вы уже сделали выбор в этой фазе")
-
+    # Полагаемся на partial unique index (миграция 20260516_unique_role_ack):
+    # параллельный второй запрос упадёт с IntegrityError, ловим его как 409.
+    # SELECT-then-INSERT раньше был race-prone — между двумя запросами оба видели
+    # пустой результат и оба успешно вставлялись.
     db.add(
         GameEvent(
             id=uuid.uuid4(),
@@ -416,7 +597,11 @@ async def acknowledge_role(db: AsyncSession, session: Session, player: Player) -
             payload={"player_id": str(player.id)},
         )
     )
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise GameError(409, "action_already_submitted", "Вы уже сделали выбор в этой фазе")
 
     alive_total = await db.scalar(
         select(func.count(Player.id)).where(Player.session_id == session.id, Player.status == "alive")
@@ -620,7 +805,7 @@ async def execute_night_sequence(
     players = (
         await db.scalars(
             select(Player)
-            .options(selectinload(Player.role))
+            .options(selectinload(Player.role), selectinload(Player.user))
             .where(Player.session_id == session.id)
         )
     ).all()
@@ -663,7 +848,7 @@ async def execute_night_sequence(
                     "reason": "Нельзя лечить одного и того же два раунда подряд",
                 }
         available_targets = [
-            {"player_id": str(p.id), "name": p.name}
+            _player_target_dict(p)
             for p in alive
             if p.id != prev_heal_target_id
         ]
@@ -676,7 +861,7 @@ async def execute_night_sequence(
             return {
                 "action_type": "lover_visit",
                 "available_targets": [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in alive
                     if p.id != actor.id and p.id != rt.lover_last_target
                 ],
@@ -693,7 +878,7 @@ async def execute_night_sequence(
             return {
                 "action_type": "don_check",
                 "available_targets": [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in alive
                     if _not_mafia_target(p)
                 ],
@@ -702,7 +887,7 @@ async def execute_night_sequence(
             return {
                 "action_type": "check",
                 "available_targets": [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in alive
                     if p.id != actor.id
                 ],
@@ -720,7 +905,7 @@ async def execute_night_sequence(
             return {
                 "action_type": "maniac_kill",
                 "available_targets": [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in alive
                     if p.id != actor.id
                 ],
@@ -818,7 +1003,7 @@ async def execute_night_sequence(
                 return r is None or r.team != "mafia"
 
             available_targets = [
-                {"player_id": str(p.id), "name": p.name}
+                _player_target_dict(p)
                 for p in alive
                 if _is_non_mafia(p)
             ]
@@ -1303,7 +1488,13 @@ async def transition_to_voting(
             # Рассылаем phase_changed каждому игроку персонально, включая available_targets
             # (список живых, кроме себя и заблокированного), чтобы фронт мог отрисовать голосование
             # без дополнительного GET /state.
-            players = (await db.scalars(select(Player).where(Player.session_id == session_id))).all()
+            players = (
+                await db.scalars(
+                    select(Player)
+                    .options(selectinload(Player.user))
+                    .where(Player.session_id == session_id)
+                )
+            ).all()
             alive = [p for p in players if p.status == "alive"]
             alive_candidates = [p for p in alive if candidate_ids is None or p.id in candidate_ids]
             timer_started_iso = rt.timer_started_at.isoformat()
@@ -1313,7 +1504,7 @@ async def transition_to_voting(
                 is_blocked = rt.day_blocked_player is not None and p.id == rt.day_blocked_player
                 targets = (
                     [
-                        {"player_id": str(t.id), "name": t.name}
+                        _player_target_dict(t)
                         for t in alive_candidates
                         if t.id != p.id
                     ]
@@ -1643,7 +1834,11 @@ async def finish_game(
         phase.ended_at = utc_now()
 
     players = (
-        await db.scalars(select(Player).options(selectinload(Player.role)).where(Player.session_id == session.id))
+        await db.scalars(
+            select(Player)
+            .options(selectinload(Player.role), selectinload(Player.user))
+            .where(Player.session_id == session.id)
+        )
     ).all()
     role_ids = {p.role_id for p in players if p.role_id}
     roles = (await db.scalars(select(Role).where(Role.id.in_(role_ids)))).all() if role_ids else []
@@ -1652,6 +1847,7 @@ async def finish_game(
         {
             "id": str(p.id),
             "name": p.name,
+            "username": p.user.display_name if p.user else None,
             "role": {"name": role_by_id[p.role_id].name, "team": role_by_id[p.role_id].team} if p.role_id else None,
             "status": p.status,
         }

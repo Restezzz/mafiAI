@@ -103,14 +103,25 @@ export default function PricingPage() {
             MafiaMaster
           </Link>
           <div className="pricing-nav__actions">
-            <Link to="/" className="pricing-nav__back">← На главную</Link>
+            <Link to="/" className="pricing-nav__back">
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M7.828 11h12.172v2H7.828l5.364 5.364-1.414 1.414L4 12l7.778-7.778 1.414 1.414L7.828 11z" />
+              </svg>
+              <span>На главную</span>
+            </Link>
             {isAuthenticated ? (
               <button className="pricing-nav__cta" onClick={() => navigate('/app')}>
-                В приложение
+                <span>В приложение</span>
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M16.172 11l-5.364-5.364 1.414-1.414L20 12l-7.778 7.778-1.414-1.414L16.172 13H4v-2z" />
+                </svg>
               </button>
             ) : (
               <button className="pricing-nav__cta" onClick={() => navigate('/auth')}>
-                Играть
+                <span>Играть</span>
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M16.172 11l-5.364-5.364 1.414-1.414L20 12l-7.778 7.778-1.414-1.414L16.172 13H4v-2z" />
+                </svg>
               </button>
             )}
           </div>

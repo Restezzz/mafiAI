@@ -15,7 +15,7 @@ interface BadgeProps {
   className?: string;
 }
 
-export default function Badge({
+function BadgeImpl({
   children,
   variant = 'default',
   size = 'sm',
@@ -32,3 +32,6 @@ export default function Badge({
 
   return <span className={classes}>{children}</span>;
 }
+
+const Badge = React.memo(BadgeImpl);
+export default Badge;

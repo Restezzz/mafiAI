@@ -44,6 +44,29 @@ class MeResponse(BaseModel):
     nickname: str
     has_pro: bool
     created_at: str
+    avatar_url: str | None = None
+
+
+class UpdateAvatarRequest(BaseModel):
+    # data:image/jpeg;base64,... — клиент сжимает картинку canvas'ом до ~50КБ.
+    # None значит «удалить аватар».
+    avatar_data_url: str | None = Field(
+        default=None,
+        max_length=200_000,
+        description="data:image/...;base64,... URL или null для удаления",
+    )
+
+    @field_validator("avatar_data_url")
+    @classmethod
+    def validate_data_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if not v.startswith("data:image/"):
+            raise ValueError("avatar_data_url должен начинаться с data:image/")
+        # минимальная sanity-проверка: должен быть base64-сегмент
+        if ";base64," not in v:
+            raise ValueError("avatar_data_url должен содержать ;base64, маркер")
+        return v
 
 
 class UpdateNicknameRequest(BaseModel):

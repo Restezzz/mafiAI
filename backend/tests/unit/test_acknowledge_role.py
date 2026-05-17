@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from core.exceptions import GameError
 from models.player import Player
@@ -27,7 +28,9 @@ async def test_acknowledge_role_returns_counts_and_broadcasts_progress(monkeypat
     phase = SimpleNamespace(id=uuid.uuid4(), phase_type="role_reveal")
 
     db = Mock()
-    db.scalar = AsyncMock(side_effect=[None, 5, 1, 4])
+    # Порядок scalar()-ов после рефакторинга: alive_total, acked, pending_alive.
+    # SELECT-then-INSERT удалён (см. #3, partial unique index).
+    db.scalar = AsyncMock(side_effect=[5, 1, 4])
     db.commit = AsyncMock()
     db.add = Mock()
 
@@ -59,7 +62,8 @@ async def test_acknowledge_role_starts_night_when_everyone_is_ready(monkeypatch:
     phase = SimpleNamespace(id=uuid.uuid4(), phase_type="role_reveal")
 
     db = Mock()
-    db.scalar = AsyncMock(side_effect=[None, 5, 5, 0])
+    # Порядок scalar()-ов: alive_total=5, acked=5, pending_alive=0 (все ack'нули).
+    db.scalar = AsyncMock(side_effect=[5, 5, 0])
     db.commit = AsyncMock()
     db.add = Mock()
 
@@ -101,13 +105,20 @@ async def test_acknowledge_role_starts_night_when_everyone_is_ready(monkeypatch:
 
 @pytest.mark.asyncio
 async def test_acknowledge_role_rejects_duplicate_ack(monkeypatch: pytest.MonkeyPatch) -> None:
+    """После рефакторинга #3 дедуп ловится через IntegrityError от partial
+    unique index uq_role_ack_session_phase_player, не через предварительный
+    SELECT.
+    """
     session = _make_session()
     player = _make_player()
     phase = SimpleNamespace(id=uuid.uuid4(), phase_type="role_reveal")
 
     db = Mock()
-    db.scalar = AsyncMock(return_value=uuid.uuid4())
-    db.commit = AsyncMock()
+    # Первый commit падает с IntegrityError (дубликат role_ack), последующих
+    # вызовов scalar/commit быть не должно.
+    db.scalar = AsyncMock()
+    db.commit = AsyncMock(side_effect=IntegrityError("INSERT", {}, Exception("duplicate")))
+    db.rollback = AsyncMock()
     db.add = Mock()
 
     monkeypatch.setattr(game_engine, "get_current_phase", AsyncMock(return_value=phase))
@@ -117,4 +128,5 @@ async def test_acknowledge_role_rejects_duplicate_ack(monkeypatch: pytest.Monkey
 
     assert exc_info.value.status_code == 409
     assert exc_info.value.code == "action_already_submitted"
-    db.commit.assert_not_awaited()
+    db.rollback.assert_awaited_once()
+    db.scalar.assert_not_awaited()  # никакие counts не считались

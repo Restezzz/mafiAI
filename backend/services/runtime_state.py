@@ -53,6 +53,14 @@ class SessionRuntime:
     # пауза: таймеры остановлены, ночная последовательность ждёт снятия паузы
     game_paused: bool = False
 
+    # События для прерываемого ожидания в _wait_or_pause:
+    # - pause_event: set когда game_paused=True (прерывает текущий sleep в фазе)
+    # - resume_event: set когда game_paused=False (разрешает продолжить sleep)
+    # Раньше _wait_or_pause polling'ил флаг каждые 200ms; теперь wait_for(...) спит
+    # до конца таймаута без расхода CPU и просыпается мгновенно при изменении паузы.
+    pause_event: asyncio.Event = field(default_factory=asyncio.Event)
+    resume_event: asyncio.Event = field(default_factory=asyncio.Event)
+
     # прервать ночную последовательность (кик / срочный выход из ожидания хода)
     night_sequence_abort: bool = False
 
@@ -63,6 +71,10 @@ class SessionRuntime:
     # Раунд дневного голосования и список кандидатов для переголосования.
     vote_round: int = 1
     voting_candidate_ids: list[uuid.UUID] | None = None
+
+    def __post_init__(self) -> None:
+        # Изначально игра НЕ на паузе, поэтому resume_event = set.
+        self.resume_event.set()
 
 
 class RuntimeState:

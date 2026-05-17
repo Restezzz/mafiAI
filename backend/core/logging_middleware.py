@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 import uuid
 
@@ -11,12 +12,25 @@ from core.logging import log_event, reset_log_context, set_log_context
 
 logger = logging.getLogger(__name__)
 
+# Разрешённый формат request-id (#21): UUID-стиль или пользовательский ID
+# с ограниченным набором символов. Без этой проверки клиент мог бы прислать
+# X-Request-ID: "abc\nINJECTED_LOG_LINE" и подделать структурный лог.
+_REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+
+
+def _sanitize_request_id(value: str | None) -> str | None:
+    if not value:
+        return None
+    if _REQUEST_ID_PATTERN.match(value):
+        return value
+    return None
+
 
 class RequestContextLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         start = time.perf_counter()
-        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
-        client_request_id = request.headers.get("X-Client-Request-ID")
+        request_id = _sanitize_request_id(request.headers.get("X-Request-ID")) or str(uuid.uuid4())
+        client_request_id = _sanitize_request_id(request.headers.get("X-Client-Request-ID"))
         response = None
         tokens = set_log_context(
             request_id=request_id,

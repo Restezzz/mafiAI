@@ -3,7 +3,7 @@ import { useAuthStore } from '../stores/authStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useGameStore } from '../stores/gameStore';
 import { SessionSettings } from '../types/game';
-import { PlayerInList } from '../types/api';
+import { AudioPreloadStatusResponse, PlayerInList } from '../types/api';
 import { logger } from '../services/logger';
 import { navigateTo } from '../utils/routerRef';
 
@@ -24,8 +24,16 @@ type WsMessage = { type: string; payload?: unknown };
 type WsPayloadRecord = Record<string, unknown>;
 
 const PING_MESSAGE = JSON.stringify({ type: 'ping' });
+const PONG_MESSAGE = JSON.stringify({ type: 'pong' });
 const NO_RECONNECT_CODES = new Set([4000, 4001, 4003]);
-const MAX_RECONNECT_ATTEMPTS = 15;
+// Если backend не ответил pong в течение этого окна после нашего ping —
+// считаем сокет мёртвым и форсируем close → onclose запустит reconnect.
+const PONG_TIMEOUT_MS = 15_000;
+// Капируем delay экспоненциального backoff'а, но НЕ количество попыток.
+// Раньше после ~15 попыток (≈10 минут) клиент сдавался — это убивало UX в
+// случае долгого отсутствия сети. Теперь пробуем бесконечно с потолком 30s.
+const MAX_RECONNECT_DELAY_MS = 30_000;
+const MAX_BACKOFF_EXPONENT = 6; // 500 * 2^6 = 32_000 → клампится до 30_000
 
 function isPayloadRecord(payload: unknown): payload is WsPayloadRecord {
   return typeof payload === 'object' && payload !== null;
@@ -111,6 +119,12 @@ const HANDLERS: Record<string, (payload: unknown) => void> = {
       return;
     }
     void sessionStore.setSettings(settings as Partial<SessionSettings>);
+  },
+
+  audio_preload_ready: (payload) => {
+    if (isPayloadRecord(payload)) {
+      useSessionStore.getState().setAudioPreloadStatus(payload as unknown as AudioPreloadStatusResponse);
+    }
   },
 
   session_closed: () => {
@@ -251,6 +265,7 @@ const HANDLERS: Record<string, (payload: unknown) => void> = {
 class WsClient {
   private socket: WebSocket | null = null;
   private heartbeatId: number | null = null;
+  private pongTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private currentSessionId: string | null = null;
   private reconnectTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -354,6 +369,19 @@ class WsClient {
   }
 
   private dispatch(msg: WsMessage): void {
+    // ping от сервера → отвечаем pong (любое сообщение тоже сбрасывает pong-watchdog).
+    if (msg.type === 'ping') {
+      this.clearPongWatchdog();
+      this.sendRaw(PONG_MESSAGE);
+      return;
+    }
+    if (msg.type === 'pong') {
+      this.clearPongWatchdog();
+      return;
+    }
+    // Любое валидное сообщение от сервера — признак жизни сокета.
+    this.clearPongWatchdog();
+
     const handler = HANDLERS[msg.type];
     if (handler) {
       handler(msg.payload);
@@ -365,12 +393,49 @@ class WsClient {
     }
   }
 
+  private sendRaw(data: string): void {
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      try {
+        this.socket.send(data);
+      } catch (err) {
+        logger.warn('ws.send_failed', 'WebSocket send failed', {
+          reason: err instanceof Error ? err.message : String(err),
+        }, { sessionId: this.currentSessionId });
+      }
+    }
+  }
+
+  private clearPongWatchdog(): void {
+    if (this.pongTimeoutId !== null) {
+      clearTimeout(this.pongTimeoutId);
+      this.pongTimeoutId = null;
+    }
+  }
+
+  private armPongWatchdog(): void {
+    this.clearPongWatchdog();
+    this.pongTimeoutId = setTimeout(() => {
+      this.pongTimeoutId = null;
+      logger.warn('ws.pong_timeout', 'WebSocket pong timeout, forcing reconnect', {
+        timeoutMs: PONG_TIMEOUT_MS,
+      }, { sessionId: this.currentSessionId });
+      // Закрываем сокет — onclose-обработчик запустит reconnect через бэкофф.
+      try {
+        this.socket?.close();
+      } catch {
+        // ignore
+      }
+    }, PONG_TIMEOUT_MS);
+  }
+
   private startHeartbeat(): void {
     this.stopHeartbeat();
     this.heartbeatId = window.setInterval(() => {
       if (this.socket?.readyState === WebSocket.OPEN) {
         try {
           this.socket.send(PING_MESSAGE);
+          // Запускаем watchdog: если pong не придёт за PONG_TIMEOUT_MS — реконнектим.
+          this.armPongWatchdog();
         } catch (err) {
           logger.warn('ws.heartbeat_failed', 'WebSocket heartbeat send failed', {
             reason: err instanceof Error ? err.message : String(err),
@@ -385,6 +450,7 @@ class WsClient {
       window.clearInterval(this.heartbeatId);
       this.heartbeatId = null;
     }
+    this.clearPongWatchdog();
   }
 
   private handleClose(e: CloseEvent): void {
@@ -399,14 +465,11 @@ class WsClient {
     const sessionId = this.currentSessionId;
     if (!sessionId) return;
 
-    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-      this.socket = null;
-      this.currentSessionId = null;
-      return;
-    }
-
-    // Экспоненциальный backoff: 500ms * 2^n, максимум 30s.
-    const delay = Math.min(30_000, 500 * Math.pow(2, this.reconnectAttempts));
+    // Экспоненциальный backoff: 500ms * 2^n, потолок MAX_RECONNECT_DELAY_MS.
+    // Без лимита попыток: пользователь может уехать в лифт на час, при возврате
+    // сети window.online событие сбросит attempts и подключится без ожидания.
+    const exponent = Math.min(this.reconnectAttempts, MAX_BACKOFF_EXPONENT);
+    const delay = Math.min(MAX_RECONNECT_DELAY_MS, 500 * Math.pow(2, exponent));
     this.reconnectAttempts += 1;
     logger.warn('ws.reconnect_scheduled', 'Scheduling WebSocket reconnect', {
       code: e.code,
@@ -426,6 +489,38 @@ class WsClient {
       }
     }, delay);
   }
+
+  /**
+   * Вызывается из глобального online-listener. Сбрасывает backoff и сразу
+   * пытается переподключиться к текущей сессии — иначе придётся ждать до
+   * 30s до следующей попытки бэкоффа.
+   */
+  handleOnline(): void {
+    if (!this.currentSessionId || this.socket) {
+      return;
+    }
+    logger.info('ws.network_restored', 'Network restored, reconnecting immediately', {
+      sessionId: this.currentSessionId,
+    }, { sessionId: this.currentSessionId });
+    if (this.reconnectTimeoutId !== null) {
+      clearTimeout(this.reconnectTimeoutId);
+      this.reconnectTimeoutId = null;
+    }
+    this.reconnectAttempts = 0;
+    this.connect(this.currentSessionId);
+  }
 }
 
 export const wsClient = new WsClient();
+
+// Глобальные слушатели: при возврате сети сразу дёргаем reconnect, не ждём
+// бэкофф-таймер. visibilitychange ловит «вернулся на вкладку» — браузеры
+// замораживают WS на фоне, после fg она может оказаться dead.
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => wsClient.handleOnline());
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      wsClient.handleOnline();
+    }
+  });
+}

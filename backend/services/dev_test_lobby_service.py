@@ -13,7 +13,10 @@ from models.session import Session
 from models.user import User
 from schemas.dev import DevLobbyInfo, DevLobbyPlayerLink
 from schemas.session import PlayerInList, SessionDetailResponse
+from services.audio_manifest import get_manifest
+from services.audio_preload import AUDIO_PRELOAD_SETTINGS_KEY
 from services.auth_service import hash_password
+from core.utils import utc_now  # noqa: F401  (used by mark_synthetic_players_audio_ready)
 
 
 DEV_TEST_LOBBY_FLAG = "dev_test_lobby"
@@ -99,6 +102,7 @@ async def build_session_detail_response(
         PlayerInList(
             id=str(p.id),
             name=p.name,
+            username=p.user.display_name if p.user else None,
             join_order=p.join_order,
             is_host=(p.user_id == session.host_user_id),
             is_me=(p.user_id == current_user_id),
@@ -172,3 +176,52 @@ async def create_synthetic_test_player(
         )
     )
     return user, player, link
+
+
+async def mark_synthetic_players_audio_ready(
+    db: AsyncSession,
+    session: Session,
+) -> None:
+    """Помечает audio-preload-ready всех синтетических игроков dev-test лобби.
+
+    Синт-игроки (DevTestLobbyLink.bootstrap_key != 'host') не имеют открытой
+    вкладки браузера и физически не вызовут POST /audio-preload-ready. Без
+    этой явной отметки счётчик ``ready_count < players_total`` навсегда
+    блокирует gameApi.start (ensure_audio_preload_ready -> 409) и автостарт
+    на StorySelectionPage.
+
+    Вызывается из begin_story — там же, где clear_audio_preload зачищает
+    предыдущую readiness-карту перед переходом на stories-фазу.
+    """
+    if not is_dev_test_lobby(session):
+        return
+
+    rows = (
+        await db.execute(
+            select(Player.id, DevTestLobbyLink.bootstrap_key)
+            .join(DevTestLobbyLink, DevTestLobbyLink.user_id == Player.user_id)
+            .where(
+                Player.session_id == session.id,
+                DevTestLobbyLink.session_id == session.id,
+            )
+        )
+    ).all()
+    synthetic_player_ids = [str(pid) for pid, key in rows if key != "host"]
+    if not synthetic_player_ids:
+        return
+
+    manifest_version = get_manifest().version
+    current_settings = dict(session.settings or {})
+    raw_preload = current_settings.get(AUDIO_PRELOAD_SETTINGS_KEY)
+    if isinstance(raw_preload, dict) and raw_preload.get("manifest_version") == manifest_version:
+        ready = dict(raw_preload.get("ready") or {})
+    else:
+        ready = {}
+    now_iso = utc_now().isoformat()
+    for pid in synthetic_player_ids:
+        ready[pid] = now_iso
+    current_settings[AUDIO_PRELOAD_SETTINGS_KEY] = {
+        "manifest_version": manifest_version,
+        "ready": ready,
+    }
+    session.settings = current_settings

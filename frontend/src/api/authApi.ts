@@ -8,6 +8,7 @@ import {
   UserProfile,
   LogoutRequest,
   UpdateNicknameRequest,
+  UpdateAvatarRequest,
   DeleteAccountRequest,
 } from '../types/api';
 
@@ -29,6 +30,9 @@ export const authApi = {
 
   updateNickname: (data: UpdateNicknameRequest) =>
     httpClient.patch<UserProfile>('/auth/me', data),
+
+  updateAvatar: (data: UpdateAvatarRequest) =>
+    httpClient.put<UserProfile>('/auth/me/avatar', data),
 
   deleteAccount: (data: DeleteAccountRequest) =>
     httpClient.delete('/auth/me', { data }),

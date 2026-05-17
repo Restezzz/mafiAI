@@ -41,6 +41,7 @@ export default function LobbyPage() {
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const [expandingDevLobby, setExpandingDevLobby] = useState(false);
+  const [shrinkingDevLobby, setShrinkingDevLobby] = useState(false);
 
   const session = useSessionStore((s) => s.session);
   const players = useSessionStore((s) => s.players);
@@ -206,6 +207,19 @@ export default function LobbyPage() {
     }
   };
 
+  const handleShrinkDevLobby = async () => {
+    if (!session) return;
+    setShrinkingDevLobby(true);
+    try {
+      const { data } = await devApi.shrinkTestLobby(session.id);
+      hydrateSessionDetail(data);
+    } catch (err) {
+      setStartError(getApiErrorMessage(err));
+    } finally {
+      setShrinkingDevLobby(false);
+    }
+  };
+
   const updateRoleConfig = async (key: keyof RoleConfig, value: number) => {
     const newConfig = { ...settings.role_config, [key]: value };
     const newSpecial = getSpecialRolesCount(newConfig);
@@ -272,6 +286,8 @@ export default function LobbyPage() {
             onOpenPlayer={handleOpenDevPlayer}
             onAddPlayer={handleExpandDevLobby}
             addDisabled={expandingDevLobby || session.player_count >= DEV_TEST_LOBBY_MAX_PLAYERS}
+            onRemovePlayer={handleShrinkDevLobby}
+            removeDisabled={shrinkingDevLobby || session.player_count <= 3}
           />
         </div>
       )}

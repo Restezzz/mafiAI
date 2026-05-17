@@ -3,6 +3,7 @@ import { UserProfile } from '../types/api';
 import { authApi } from '../api/authApi';
 import { refreshAccessToken } from '../api/httpClient';
 import { AuthStorageMode, getRefreshToken, removeRefreshToken, setRefreshToken } from '../utils/tokenStorage';
+import { clearAudioPreloadCache } from '../utils/audioPreloader';
 import { logger } from '../services/logger';
 
 interface AuthState {
@@ -49,6 +50,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         }
       }
       removeRefreshToken();
+      // Освобождаем blob: URL'ы озвучки — иначе при logout они держатся
+      // в памяти браузера до полной перезагрузки страницы.
+      clearAudioPreloadCache();
       set({ accessToken: null, user: null, isAuthenticated: false });
       logger.info('auth.logout_success', 'User logged out on frontend');
     } finally {

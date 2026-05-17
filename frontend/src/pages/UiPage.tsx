@@ -716,7 +716,7 @@ export default function UiPage() {
             states={[
               { label: 'initial', node: <Avatar variant="initial" name="Александр" size={48} /> },
               { label: 'initial + team', node: <Avatar variant="initial" name="Мафия" size={48} team="mafia" /> },
-              { label: 'icon + overlay', node: <Avatar variant="icon" icon={<UserIcon />} size={64} overlay={<EditIcon />} onClick={() => {}} /> },
+              { label: 'icon + badge', node: <Avatar variant="icon" icon={<UserIcon />} size={64} badge={<EditIcon />} onClick={() => {}} /> },
               { label: 'image rounded', node: <Avatar variant="image" shape="rounded" size={44} src="/img/mafia.png" ariaLabel="Мафия" team="mafia" /> },
               { label: 'image dead', node: <Avatar variant="image" shape="rounded" size={44} src="/img/mafia.png" ariaLabel="Выбыл" team="mafia" overlay={<XIcon />} /> },
             ]}

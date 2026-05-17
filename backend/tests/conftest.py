@@ -86,3 +86,6 @@ def event_loop():
 @pytest.fixture(scope="session", autouse=True)
 def _set_test_env():
     os.environ.setdefault("SECRET_KEY", "test-secret-key-32-characters-minimum!!")
+    # Отключает rate-limiter в core/rate_limit.py — иначе integration-тесты
+    # могут наткнуться на 429 при многократных авторизациях в одной сессии.
+    os.environ.setdefault("APP_ENV", "test")

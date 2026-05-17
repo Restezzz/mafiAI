@@ -49,6 +49,7 @@ export interface UserProfile {
   nickname: string;
   has_pro: boolean;
   created_at: string;
+  avatar_url?: string | null;
 }
 
 export interface LogoutRequest {
@@ -57,6 +58,10 @@ export interface LogoutRequest {
 
 export interface UpdateNicknameRequest {
   nickname: string;
+}
+
+export interface UpdateAvatarRequest {
+  avatar_data_url: string | null;
 }
 
 export interface DeleteAccountRequest {
@@ -79,6 +84,8 @@ export interface CreateSessionResponse extends Session {}
 export interface PlayerInList {
   id: string;
   name: string;
+  /** Никнейм аккаунта (User.display_name) — отрисовывается под name в UI. */
+  username?: string | null;
   join_order: number;
   is_host: boolean;
   is_me: boolean;
@@ -116,6 +123,19 @@ export interface UpdateSettingsRequest {
 
 export interface UpdateSettingsResponse {
   settings: SessionSettings;
+}
+
+export interface AudioPreloadStatusResponse {
+  manifest_version: string;
+  required: boolean;
+  audio_count: number;
+  ready_count: number;
+  players_total: number;
+  ready_player_ids: string[];
+}
+
+export interface AudioPreloadReadyRequest {
+  manifest_version: string;
 }
 
 export interface ActivateDevPlayerRequest {

@@ -68,7 +68,7 @@ async def _get_dev_test_session_or_404(db: AsyncSession, session_id: uuid.UUID) 
     session = await db.scalar(
         select(Session)
         .execution_options(populate_existing=True)
-        .options(selectinload(Session.players))
+        .options(selectinload(Session.players).selectinload(Player.user))
         .where(Session.id == session_id)
     )
     if session is None:
@@ -184,6 +184,7 @@ async def expand_test_lobby(
                 "payload": {
                     "id": str(new_player.id),
                     "name": new_player.name,
+                    "username": new_player.user.display_name if new_player.user else None,
                     "join_order": new_player.join_order,
                     "is_host": False,
                 },
@@ -198,6 +199,84 @@ async def expand_test_lobby(
         logging.INFO,
         "dev.test_lobby_expanded",
         "Dev test lobby expanded",
+        session_id=str(session.id),
+        user_id=str(current_user_id),
+        player_count=session.player_count,
+    )
+    return await build_session_detail_response(db, session, current_user_id)
+
+
+MIN_TEST_LOBBY_PLAYER_COUNT = 3
+
+
+@router.post("/test-lobbies/{session_id}/shrink", response_model=SessionDetailResponse)
+async def shrink_test_lobby(
+    session_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SessionDetailResponse:
+    current_user_id = current_user.id
+    session = await _get_dev_test_session_or_404(db, session_id)
+    if session.host_user_id != current_user_id:
+        raise GameError(403, "not_host", "Только организатор может выполнить это действие")
+    if session.status != "waiting":
+        raise GameError(409, "game_already_started", "Игра уже началась")
+    if session.player_count <= MIN_TEST_LOBBY_PLAYER_COUNT:
+        raise GameError(400, "validation_error", "Достигнут минимум тестовых игроков")
+
+    last_slot = session.player_count
+    last_player = next(
+        (p for p in session.players if p.join_order == last_slot), None
+    )
+    if last_player is None:
+        raise GameError(404, "player_not_found", "Последний игрок не найден")
+
+    removed_player_id = str(last_player.id)
+    removed_user_id = last_player.user_id
+
+    # Delete link, player, then synthetic user
+    link = await db.scalar(
+        select(DevTestLobbyLink).where(
+            DevTestLobbyLink.session_id == session.id,
+            DevTestLobbyLink.slot_number == last_slot,
+        )
+    )
+    if link:
+        await db.delete(link)
+    await db.delete(last_player)
+    await db.flush()
+
+    # Delete the synthetic user (safe — only dev users are created by this flow)
+    removed_user = await db.get(User, removed_user_id)
+    if removed_user is not None:
+        await db.delete(removed_user)
+
+    session.player_count = last_slot - 1
+    current_settings = dict(session.settings or {})
+    role_config = dict(current_settings.get("role_config") or {})
+    civilian = validate_role_config(session.player_count, role_config)
+    current_settings["role_config"] = {**role_config, "civilian": civilian}
+    session.settings = current_settings
+
+    current_session_id = session.id
+    await db.commit()
+
+    db.expire_all()
+    session = await _get_dev_test_session_or_404(db, current_session_id)
+
+    await ws_manager.send_to_session(
+        session.id,
+        {"type": "player_left", "payload": {"player_id": removed_player_id}},
+    )
+    await ws_manager.send_to_session(
+        session.id,
+        {"type": "settings_updated", "payload": {"settings": session.settings}},
+    )
+    log_event(
+        logger,
+        logging.INFO,
+        "dev.test_lobby_shrunk",
+        "Dev test lobby shrunk",
         session_id=str(session.id),
         user_id=str(current_user_id),
         player_count=session.player_count,

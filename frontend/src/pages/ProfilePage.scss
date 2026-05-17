@@ -127,6 +127,12 @@
     color: rgba(255, 255, 255, 0.3);
     margin: 0;
   }
+
+  &__error {
+    font-size: 13px;
+    color: #ff6b6b;
+    margin: 6px 0 0;
+  }
 }
 
 /* Sections */

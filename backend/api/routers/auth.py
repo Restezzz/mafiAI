@@ -9,14 +9,15 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import delete, select
+from fastapi import APIRouter, Depends, Request, Response
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_current_user, get_db, has_active_pro
 from core.exceptions import GameError
 from core.logging import log_event, set_log_context
+from core.rate_limit import limiter
 from models.refresh_token import RefreshToken
 from models.user import User
 from schemas.auth import (
@@ -28,6 +29,7 @@ from schemas.auth import (
     RefreshRequest,
     RegisterRequest,
     TokenResponse,
+    UpdateAvatarRequest,
     UpdateNicknameRequest,
 )
 from services.auth_service import (
@@ -46,7 +48,13 @@ logger = logging.getLogger(__name__)
 
 
 @router.post("/register", response_model=AuthResponse, status_code=201)
-async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)) -> AuthResponse:
+@limiter.limit("5/hour")
+async def register(
+    request: Request,
+    response: Response,
+    payload: RegisterRequest,
+    db: AsyncSession = Depends(get_db),
+) -> AuthResponse:
     existing = await db.scalar(select(User).where(User.email == payload.email))
     if existing is not None:
         raise GameError(409, "email_already_registered", "Этот email уже зарегистрирован")
@@ -88,7 +96,13 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
 
 
 @router.post("/login", response_model=AuthResponse)
-async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> AuthResponse:
+@limiter.limit("10/5minutes")
+async def login(
+    request: Request,
+    response: Response,
+    payload: LoginRequest,
+    db: AsyncSession = Depends(get_db),
+) -> AuthResponse:
     user = await db.scalar(select(User).where(User.email == payload.email))
     if user is None:
         raise GameError(401, "invalid_credentials", "Неверный email или пароль")
@@ -119,26 +133,50 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> Au
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+@limiter.limit("30/5minutes")
+async def refresh(
+    request: Request,
+    response: Response,
+    payload: RefreshRequest,
+    db: AsyncSession = Depends(get_db),
+) -> TokenResponse:
     now = datetime.now(timezone.utc)
     token_hash = hash_refresh_token(payload.refresh_token)
 
     rt = await db.scalar(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
     if rt is None:
         raise GameError(401, "token_invalid", "Refresh токен не найден или уже использован")
+
+    # Reuse detection: токен уже отзывался → угон, инвалидируем все активные.
+    if rt.revoked_at is not None:
+        await db.execute(
+            update(RefreshToken)
+            .where(RefreshToken.user_id == rt.user_id, RefreshToken.revoked_at.is_(None))
+            .values(revoked_at=now)
+        )
+        await db.commit()
+        log_event(
+            logger,
+            logging.WARNING,
+            "auth.refresh_reuse_detected",
+            "Refresh token reuse detected; all user tokens revoked",
+            user_id=str(rt.user_id),
+        )
+        raise GameError(401, "token_invalid", "Refresh токен не найден или уже использован")
+
     if rt.expires_at < now:
-        await db.delete(rt)
+        rt.revoked_at = now
         await db.commit()
         raise GameError(401, "token_expired", "Срок действия токена истёк")
 
     user = await db.get(User, rt.user_id)
     if user is None:
-        await db.delete(rt)
+        rt.revoked_at = now
         await db.commit()
         raise GameError(401, "token_invalid", "Refresh токен не найден или уже использован")
 
-    # rotation: удалить использованный
-    await db.delete(rt)
+    # rotation: soft-revoke использованного токена для reuse-detection.
+    rt.revoked_at = now
 
     access = create_access_token(str(user.id), user.email)
     refresh_token = create_refresh_token()
@@ -157,15 +195,20 @@ async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -
     return TokenResponse(access_token=access, refresh_token=refresh_token)
 
 
+async def _me_response(user: User, db: AsyncSession) -> MeResponse:
+    return MeResponse(
+        user_id=str(user.id),
+        email=user.email,
+        nickname=user.display_name,
+        has_pro=await has_active_pro(db, user.id),
+        created_at=user.created_at.isoformat(),
+        avatar_url=user.avatar_url,
+    )
+
+
 @router.get("/me", response_model=MeResponse)
 async def me(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> MeResponse:
-    return MeResponse(
-        user_id=str(current_user.id),
-        email=current_user.email,
-        nickname=current_user.display_name,
-        has_pro=await has_active_pro(db, current_user.id),
-        created_at=current_user.created_at.isoformat(),
-    )
+    return await _me_response(current_user, db)
 
 
 @router.patch("/me", response_model=MeResponse)
@@ -184,13 +227,32 @@ async def update_me_nickname(
         "User nickname updated",
         user_id=str(current_user.id),
     )
-    return MeResponse(
+    return await _me_response(current_user, db)
+
+
+@router.put("/me/avatar", response_model=MeResponse)
+async def update_me_avatar(
+    payload: UpdateAvatarRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MeResponse:
+    """Сохраняет аватарку как base64 data URL в users.avatar_url.
+
+    `avatar_data_url=null` удаляет аватарку. Размер ограничен ~200КБ —
+    клиент должен сжать canvas'ом до ~50КБ перед отправкой.
+    """
+    current_user.avatar_url = payload.avatar_data_url
+    await db.commit()
+    await db.refresh(current_user)
+    log_event(
+        logger,
+        logging.INFO,
+        "auth.avatar_updated",
+        "User avatar updated",
         user_id=str(current_user.id),
-        email=current_user.email,
-        nickname=current_user.display_name,
-        has_pro=await has_active_pro(db, current_user.id),
-        created_at=current_user.created_at.isoformat(),
+        avatar_set=payload.avatar_data_url is not None,
     )
+    return await _me_response(current_user, db)
 
 
 @router.delete("/me", status_code=204)
@@ -213,10 +275,15 @@ async def logout(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     token_hash = hash_refresh_token(payload.refresh_token)
+    # Soft-revoke вместо delete: запись остаётся для reuse-detection в /refresh.
     await db.execute(
-        delete(RefreshToken).where(
-            RefreshToken.user_id == current_user.id, RefreshToken.token_hash == token_hash
+        update(RefreshToken)
+        .where(
+            RefreshToken.user_id == current_user.id,
+            RefreshToken.token_hash == token_hash,
+            RefreshToken.revoked_at.is_(None),
         )
+        .values(revoked_at=datetime.now(timezone.utc))
     )
     await db.commit()
     log_event(logger, logging.INFO, "auth.logout_succeeded", "User logged out", user_id=str(current_user.id))

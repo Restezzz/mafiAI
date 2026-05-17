@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, ForeignKey, String, TIMESTAMP, func, Index
+from sqlalchemy import CheckConstraint, ForeignKey, String, TIMESTAMP, func, Index, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -27,6 +27,19 @@ class GameEvent(Base):
             name="ck_game_events_type",
         ),
         Index("idx_game_events_session_created", "session_id", "created_at"),
+        # Composite index для частых COUNT/SELECT по (session, phase, event_type) (#19):
+        # acknowledge_role и /state часто гоняют WHERE session_id=? AND phase_id=? AND event_type=?
+        Index("ix_game_events_session_phase_type", "session_id", "phase_id", "event_type"),
+        # Partial unique index — защита от двойного role_acknowledged.
+        # Создаётся миграцией 20260516_unique_role_ack (postgresql_where).
+        Index(
+            "uq_role_ack_session_phase_player",
+            "session_id",
+            "phase_id",
+            text("(payload->>'player_id')"),
+            unique=True,
+            postgresql_where=text("event_type = 'role_acknowledged'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
