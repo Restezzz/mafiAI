@@ -144,7 +144,7 @@ const FAQ: FAQItem[] = [
   },
   {
     q: 'Сколько человек нужно для игры?',
-    a: 'Минимум 4, максимум 15. Чем больше игроков — тем больше ролей доступно: дон, шериф, доктор, любовница, маньяк и другие.',
+    a: 'Минимум 5, максимум 15. Чем больше игроков — тем больше ролей доступно: дон, шериф, доктор, любовница, маньяк и другие.',
   },
   {
     q: 'Как работает ИИ-ведущий?',
@@ -170,6 +170,45 @@ export default function LandingPage() {
 
   const heroRef = useRef<HTMLDivElement>(null);
   const [openFaq, setOpenFaq] = useState<number | null>(0);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [activeSection, setActiveSection] = useState<string | null>(null);
+
+  // Scroll-spy: подсвечиваем в хедере ту секцию, чья середина пересекает центр
+  // вьюпорта. rootMargin -50%/-50% сжимает роот в горизонтальную линию:
+  // в любой момент интерсектится ровно одна секция.
+  useEffect(() => {
+    const sectionIds = ['features', 'scenarios', 'how', 'faq'];
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            setActiveSection(entry.target.id);
+          }
+        });
+      },
+      { rootMargin: '-50% 0px -50% 0px', threshold: 0 },
+    );
+    sectionIds.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) observer.observe(el);
+    });
+    return () => observer.disconnect();
+  }, []);
+
+  // Закрываем мобильное меню на Escape, чтобы не ловить фокус внутри выпадашки.
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMobileMenuOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mobileMenuOpen]);
+
+  const handleNavLink = (id: string) => {
+    setMobileMenuOpen(false);
+    scrollToId(id);
+  };
 
   // Hero parallax + entry animation
   useEffect(() => {
@@ -202,7 +241,10 @@ export default function LandingPage() {
         },
       });
 
-      // Reveal cards on scroll
+      // Reveal cards on scroll. once: true — анимация играет один раз и
+      // больше не реверсится. Защищает от ситуаций, когда ScrollTrigger.refresh()
+      // (например, на resize / при показе-скрытии мобильного адресбара)
+      // переустанавливал бы элементы в "from" состояние и запускал play заново.
       gsap.utils.toArray<HTMLElement>('.landing-feature').forEach((el) => {
         gsap.fromTo(
           el,
@@ -215,7 +257,7 @@ export default function LandingPage() {
             scrollTrigger: {
               trigger: el,
               start: 'top bottom-=80',
-              toggleActions: 'play none none reverse',
+              once: true,
             },
           },
         );
@@ -234,7 +276,7 @@ export default function LandingPage() {
             scrollTrigger: {
               trigger: el,
               start: 'top bottom-=100',
-              toggleActions: 'play none none reverse',
+              once: true,
             },
           },
         );
@@ -252,14 +294,28 @@ export default function LandingPage() {
             scrollTrigger: {
               trigger: el,
               start: 'top bottom-=80',
-              toggleActions: 'play none none reverse',
+              once: true,
             },
           },
         );
       });
     }, heroRef);
 
-    return () => ctx.revert();
+    // После того как все шрифты/картинки догрузились — рефреш ScrollTrigger,
+    // чтобы trigger-позиции были корректны (иначе из-за изменений layout после
+    // mount триггеры могут оказаться в неправильных скролл-позициях).
+    const refreshHandler = () => ScrollTrigger.refresh();
+    if (document.readyState === 'complete') {
+      // Уже загрузилось — рефрешим в следующем кадре, чтобы layout успел осесть.
+      requestAnimationFrame(refreshHandler);
+    } else {
+      window.addEventListener('load', refreshHandler, { once: true });
+    }
+
+    return () => {
+      window.removeEventListener('load', refreshHandler);
+      ctx.revert();
+    };
   }, []);
 
   const handlePlay = () => {
@@ -277,7 +333,7 @@ export default function LandingPage() {
 
   return (
     <div className="landing" ref={heroRef}>
-      {/* ─── NAVBAR (glass, scrolls with page, not sticky) ───── */}
+      {/* ─── NAVBAR (glass, fixed — следует за скроллом + scroll-spy) ─── */}
       <nav className="landing-nav landing-nav--glass">
         <div className="landing-nav__inner">
           <Link to="/" className="landing-nav__logo">
@@ -285,13 +341,55 @@ export default function LandingPage() {
             <span className="landing-nav__logo-text">MafiaMaster</span>
           </Link>
           <div className="landing-nav__links">
-            <button onClick={() => scrollToId('features')}>Возможности</button>
-            <button onClick={() => scrollToId('scenarios')}>Сюжеты</button>
-            <button onClick={() => scrollToId('how')}>Как играть</button>
+            <button
+              className={activeSection === 'features' ? 'is-active' : ''}
+              onClick={() => scrollToId('features')}
+            >
+              Возможности
+            </button>
+            <button
+              className={activeSection === 'scenarios' ? 'is-active' : ''}
+              onClick={() => scrollToId('scenarios')}
+            >
+              Сюжеты
+            </button>
+            <button
+              className={activeSection === 'how' ? 'is-active' : ''}
+              onClick={() => scrollToId('how')}
+            >
+              Как играть
+            </button>
             <Link to="/pricing">Тарифы</Link>
-            <button onClick={() => scrollToId('faq')}>FAQ</button>
+            <button
+              className={activeSection === 'faq' ? 'is-active' : ''}
+              onClick={() => scrollToId('faq')}
+            >
+              FAQ
+            </button>
           </div>
           <div className="landing-nav__actions">
+            <button
+              type="button"
+              className="landing-nav__menu-btn"
+              aria-label={mobileMenuOpen ? 'Закрыть меню' : 'Открыть меню'}
+              aria-expanded={mobileMenuOpen}
+              onClick={() => setMobileMenuOpen((v) => !v)}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                {mobileMenuOpen ? (
+                  <>
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                  </>
+                ) : (
+                  <>
+                    <line x1="4" y1="7" x2="20" y2="7" />
+                    <line x1="4" y1="12" x2="20" y2="12" />
+                    <line x1="4" y1="17" x2="20" y2="17" />
+                  </>
+                )}
+              </svg>
+            </button>
             <button className="landing-btn landing-btn--primary landing-btn--small" onClick={handlePlay}>
               <span>{isAuthenticated ? 'В приложение' : 'Играть'}</span>
               <svg viewBox="0 0 24 24" fill="currentColor">
@@ -299,6 +397,15 @@ export default function LandingPage() {
               </svg>
             </button>
           </div>
+          {mobileMenuOpen && (
+            <div className="landing-nav__mobile-menu" role="menu">
+              <button onClick={() => handleNavLink('features')}>Возможности</button>
+              <button onClick={() => handleNavLink('scenarios')}>Сюжеты</button>
+              <button onClick={() => handleNavLink('how')}>Как играть</button>
+              <Link to="/pricing" onClick={() => setMobileMenuOpen(false)}>Тарифы</Link>
+              <button onClick={() => handleNavLink('faq')}>FAQ</button>
+            </div>
+          )}
         </div>
       </nav>
 

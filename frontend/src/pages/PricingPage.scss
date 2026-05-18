@@ -53,18 +53,23 @@ $ml-red-deep: #8b0000;
   }
 }
 
-// ─── Nav (matches .landing-nav: floating glass pill) ────────────────────
+// ─── Nav (matches .landing-nav: floating glass pill, fixed на скролле) ──
 .pricing-nav {
-  position: relative;
+  position: fixed;
+  top: 16px;
+  left: 0;
+  right: 0;
   z-index: 50;
   width: 100%;
-  margin: 16px auto 0;
+  margin: 0 auto;
   max-width: calc(1280px + 32px);
   padding: 0 16px;
   background: transparent;
   border: none;
+  pointer-events: none; // пускаем клики сквозь боковые padding-зоны
 
   &__inner {
+    pointer-events: auto;
     border-radius: 999px;
     padding: 12px 18px 12px 22px;
     display: flex;
@@ -227,7 +232,9 @@ $ml-red-deep: #8b0000;
 // ─── Header ──────────────────────────────────────────────────────────────
 .pricing-header {
   position: relative;
-  padding: 100px 24px 60px;
+  // padding-top увеличен — компенсируем высоту fixed pricing-nav (~74px) +
+  // комфортный визуальный отступ от него.
+  padding: 140px 24px 60px;
   text-align: center;
   overflow: hidden;
 
