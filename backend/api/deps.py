@@ -125,3 +125,14 @@ async def has_active_pro(db: AsyncSession, user_id: uuid.UUID) -> bool:
         )
     )
     return exists is not None
+
+
+async def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    """Гейт для админ-эндпоинтов (narrator panel и т.п.).
+
+    Проверяет ``users.is_admin``. Флаг не выдаётся через API — только вручную
+    через SQL/CLI. Возвращает 403 forbidden, если флаг не выставлен.
+    """
+    if not current_user.is_admin:
+        raise GameError(403, "forbidden", "Доступ только для администраторов")
+    return current_user

@@ -43,6 +43,7 @@ class MeResponse(BaseModel):
     email: str
     nickname: str
     has_pro: bool
+    is_admin: bool
     created_at: str
     avatar_url: str | None = None
 
