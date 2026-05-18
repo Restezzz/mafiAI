@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -67,6 +68,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AI-GameMaster", lifespan=lifespan)
+
+# Mount хранилища аудио narrator'а. mkdir(exist_ok=True) идемпотентен — папка
+# может уже существовать (Docker volume, повторный запуск). Создаём до mount'а,
+# иначе Starlette.StaticFiles в первом запросе кинет RuntimeError("directory ... does not exist").
+settings.audio_storage_path.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/audio",
+    StaticFiles(directory=str(settings.audio_storage_path)),
+    name="narrator_audio",
+)
 
 # Rate limiter: ставим до CORS и логирования, чтобы 429 уходил без полной обработки.
 # Лимиты per-route задаются декоратором @limiter.limit(...) в роутерах.
