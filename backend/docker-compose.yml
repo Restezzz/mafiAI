@@ -37,6 +37,9 @@ services:
       APP_ENV: development
       LOG_LEVEL: DEBUG
       AUDIO_MANIFEST_PATH: /audio_manifest.json
+      # Хранилище mp3 narrator-системы. Должно быть внутри /app, чтобы сохраняться
+      # между рестартами (через bind-mount '.':'/app').
+      AUDIO_STORAGE_ROOT: /app/audio_storage
       PYTHONUNBUFFERED: "1"
       FRONTEND_LOG_INGEST_ENABLED: "true"
       # Включает /api/observability/* для logs-frontend dashboard (без auth, dev only)
@@ -47,6 +50,9 @@ services:
     volumes:
       - .:/app
       - ../audio_manifest.json:/audio_manifest.json:ro
+      # Read-only mount исходных mp3 для разового скрипта миграции
+      # (scripts/migrate_narrator_to_db.py --audio-src /seed_audio).
+      - ../frontend/public/audio:/seed_audio:ro
     # Применяем миграции перед стартом — иначе recovery_loop падает на отсутствующих таблицах
     command: >
       sh -c "uv run alembic upgrade head &&

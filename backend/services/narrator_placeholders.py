@@ -48,6 +48,26 @@ PLACEHOLDER_CATALOG: tuple[PlaceholderSpec, ...] = (
         label="Имя обвиняемого",
         description="Игрок, выставленный на голосование.",
     ),
+    PlaceholderSpec(
+        key="saved_player_name",
+        label="Имя спасённого",
+        description="Игрок, которого ночью спас доктор (используется в multiple_killed_with_save / one_killed_with_save).",
+    ),
+    PlaceholderSpec(
+        key="died_player_name",
+        label="Имя погибшего",
+        description="Имя одного погибшего ночью игрока (single victim).",
+    ),
+    PlaceholderSpec(
+        key="died_player_names",
+        label="Имена погибших",
+        description="Список погибших ночью игроков, объединённых через ' и ' (multi-victim).",
+    ),
+    PlaceholderSpec(
+        key="blocked_player_name",
+        label="Имя заблокированного",
+        description="Игрок, которого любовница ночью заблокировала на дневное голосование.",
+    ),
 )
 
 
