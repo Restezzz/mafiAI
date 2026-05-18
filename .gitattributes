@@ -1,0 +1,11 @@
+# Shell-скрипты ВСЕГДА с LF (даже на Windows-чекауте) — иначе shebang
+# сломается на Linux-сервере и контейнер не запустится.
+*.sh text eol=lf
+
+# Dockerfile / docker-compose тоже LF — единообразие на Linux-хостах
+Dockerfile* text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# nginx-конфиги — LF
+*.conf text eol=lf

@@ -67,4 +67,34 @@ class Settings(BaseSettings):
         return _parse_json_list(self.CORS_ORIGINS)
 
 
+# Дефолтный SECRET_KEY из .env.example — байтово сравниваем, чтобы
+# не допустить запуск прода с публично известным ключом подписи JWT.
+_DEFAULT_DEV_SECRET_KEY = "change-me-to-a-random-string-at-least-32-chars"
+
+
+def _validate_production(s: "Settings") -> None:
+    """Жёсткие проверки production-конфига.
+
+    Падаем на старте если:
+    - APP_ENV=production, но SECRET_KEY = дефолтный (JWT подделываются).
+    - APP_ENV=production, но OBSERVABILITY_ENABLED=true (открытые
+      эндпоинты со списком сессий/юзеров без auth).
+    - APP_ENV=production, но SECRET_KEY короче 32 символов.
+    """
+    if s.APP_ENV != "production":
+        return
+    if s.SECRET_KEY == _DEFAULT_DEV_SECRET_KEY:
+        raise RuntimeError(
+            "SECRET_KEY имеет дефолтное dev-значение. "
+            "Сгенерируй: openssl rand -hex 32"
+        )
+    if len(s.SECRET_KEY) < 32:
+        raise RuntimeError("SECRET_KEY короче 32 символов — недостаточно для HS256")
+    if s.OBSERVABILITY_ENABLED:
+        raise RuntimeError(
+            "OBSERVABILITY_ENABLED=true в production. Эти эндпоинты без auth, выключи."
+        )
+
+
 settings = Settings()
+_validate_production(settings)
