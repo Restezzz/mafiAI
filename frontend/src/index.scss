@@ -8,6 +8,15 @@ html {
   height: 100%;
   -webkit-text-size-adjust: 100%;
   overflow-x: hidden;
+  // Глобально выключаем scroll-anchor. На лендинге SVG-marquee (DEAL CORNER ×)
+  // в RAF-цикле микро-сдвигает scrollable overflow rect документа на каждый кадр.
+  // Браузер с default `overflow-anchor: auto` пытается компенсировать это,
+  // подкручивая scroll position так, чтобы "anchor"-элемент оставался на месте, —
+  // визуально это выглядит как непрерывные прыжки всего контента под marquee.
+  // Для нашего приложения accessibility-фича scroll-anchoring не критична
+  // (нет фидов / лениво-подгружающегося контента над viewport'ом), поэтому
+  // безопасно отключаем глобально.
+  overflow-anchor: none;
 }
 
 body {
@@ -21,6 +30,7 @@ body {
   background-color: #000000;
   color: #ffffff;
   overflow-x: hidden;
+  overflow-anchor: none;
 }
 
 #root {

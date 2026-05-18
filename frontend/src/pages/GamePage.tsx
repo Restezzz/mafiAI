@@ -93,8 +93,21 @@ export default function GamePage() {
   const session = useSessionStore((s) => s.session);
   const isHost = useSessionStore((s) => s.isHost);
 
-  const [flipped, setFlipped] = useState(false);
-  const [showAbilities, setShowAbilities] = useState(false);
+  // Persist "card flipped" across F5 within the same session: once the player
+  // has revealed the role, refreshing should not hide it again. Cleared once
+  // we leave role_reveal phase (see effect below).
+  const flipStorageKey = sessionId ? `mafia:role-revealed:${sessionId}` : null;
+  const initialFlipped = (() => {
+    if (!flipStorageKey) return false;
+    try {
+      return window.localStorage.getItem(flipStorageKey) === '1';
+    } catch {
+      return false;
+    }
+  })();
+
+  const [flipped, setFlipped] = useState(initialFlipped);
+  const [showAbilities, setShowAbilities] = useState(initialFlipped);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const autoAcknowledgeRef = useRef(false);
@@ -131,6 +144,22 @@ export default function GamePage() {
           navigate('/app', { replace: true });
           return;
         }
+        // После F5 sessionStore пуст, но gameStore.loadState возвращает session_code.
+        // Догружаем session detail (там dev_lobby с ссылками на тестовых игроков).
+        const sessionState = useSessionStore.getState();
+        if (!sessionState.session) {
+          const code = afterLoad.sessionCode;
+          if (code) {
+            try {
+              await sessionState.loadByCode(code);
+            } catch (loadErr) {
+              logger.warn('session.detail_hydrate_failed', 'Failed to hydrate session detail on game page', {
+                reason: loadErr instanceof Error ? loadErr.message : String(loadErr),
+                sessionId,
+              }, { sessionId });
+            }
+          }
+        }
         wsClient.connect(sessionId);
       } catch (err) {
         if (!cancelled) {
@@ -159,6 +188,19 @@ export default function GamePage() {
     }
   }, [screen, acknowledged, flipped]);
 
+  // Чистим флаг открытой карточки в localStorage при выходе из role_reveal,
+  // чтобы в следующей игре с тем же sessionId (теоретически невозможно, но всё
+  // же) карточка не открывалась автоматически.
+  useEffect(() => {
+    if (screen && screen !== 'role_reveal' && screen !== 'syncing' && flipStorageKey) {
+      try {
+        window.localStorage.removeItem(flipStorageKey);
+      } catch {
+        // Игнорируем — это лишь cleanup.
+      }
+    }
+  }, [screen, flipStorageKey]);
+
   useEffect(() => {
     if (screen !== 'role_reveal') {
       autoAcknowledgeRef.current = false;
@@ -181,6 +223,14 @@ export default function GamePage() {
   const handleFlip = () => {
     if (!flipped) {
       setFlipped(true);
+      if (flipStorageKey) {
+        try {
+          window.localStorage.setItem(flipStorageKey, '1');
+        } catch {
+          // localStorage может быть недоступен (private mode) — игнорируем,
+          // тогда после F5 карточка снова закроется.
+        }
+      }
       setTimeout(() => setShowAbilities(true), 500);
     }
   };

@@ -2,6 +2,7 @@ import {
   PointerEvent as ReactPointerEvent,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -34,7 +35,6 @@ export default function CurvedLoop({
   const textPathRef = useRef<SVGTextPathElement | null>(null);
   const pathRef = useRef<SVGPathElement | null>(null);
   const [spacing, setSpacing] = useState(0);
-  const [offset, setOffset] = useState(0);
   const uid = useId();
   const pathId = `curve-${uid.replace(/[:]/g, '')}`;
   const pathD = `M-100,40 Q500,${40 + curveAmount} 1540,40`;
@@ -58,30 +58,35 @@ export default function CurvedLoop({
     }
   }, [text, className]);
 
-  useEffect(() => {
+  // useLayoutEffect — выставляем начальный startOffset до первого пайнта,
+  // чтобы не было миллисекундного флеша с offset=0. Пишем через baseVal.value
+  // (user units) — прямая запись без парсинга строки.
+  useLayoutEffect(() => {
     if (!spacing) return;
     if (textPathRef.current) {
-      const initial = -spacing;
-      textPathRef.current.setAttribute('startOffset', initial + 'px');
-      setOffset(initial);
+      textPathRef.current.startOffset.baseVal.value = -spacing;
     }
   }, [spacing]);
 
   useEffect(() => {
     if (!spacing || !ready) return;
+    // При speed=0 RAF-цикл не запускаем вообще — никаких setAttribute / no-op
+    // frame'ов / CPU-нагрузки. Это удобно для статичных копий компонента.
+    if (speed === 0) return;
     let frame = 0;
     const step = () => {
       if (!dragRef.current && textPathRef.current) {
         const delta = dirRef.current === 'right' ? speed : -speed;
-        const currentOffset = parseFloat(textPathRef.current.getAttribute('startOffset') || '0');
-        let newOffset = currentOffset + delta;
+        // Пишем через baseVal.value (user units) вместо setAttribute(… + 'px') —
+        // прямая запись без парсинга строки.
+        const baseVal = textPathRef.current.startOffset.baseVal;
+        let newOffset = baseVal.value + delta;
 
         const wrapPoint = spacing;
         if (newOffset <= -wrapPoint) newOffset += wrapPoint;
         if (newOffset > 0) newOffset -= wrapPoint;
 
-        textPathRef.current.setAttribute('startOffset', newOffset + 'px');
-        setOffset(newOffset);
+        baseVal.value = newOffset;
       }
       frame = requestAnimationFrame(step);
     };
@@ -103,15 +108,14 @@ export default function CurvedLoop({
     lastXRef.current = e.clientX;
     velRef.current = dx;
 
-    const currentOffset = parseFloat(textPathRef.current.getAttribute('startOffset') || '0');
-    let newOffset = currentOffset + dx;
+    const baseVal = textPathRef.current.startOffset.baseVal;
+    let newOffset = baseVal.value + dx;
 
     const wrapPoint = spacing;
     if (newOffset <= -wrapPoint) newOffset += wrapPoint;
     if (newOffset > 0) newOffset -= wrapPoint;
 
-    textPathRef.current.setAttribute('startOffset', newOffset + 'px');
-    setOffset(newOffset);
+    baseVal.value = newOffset;
   };
 
   const endDrag = () => {
@@ -145,7 +149,9 @@ export default function CurvedLoop({
         </defs>
         {ready && (
           <text fontWeight="bold" xmlSpace="preserve" className={className}>
-            <textPath ref={textPathRef} href={`#${pathId}`} startOffset={offset + 'px'} xmlSpace="preserve">
+            {/* startOffset не передаём через JSX — им управляет реф (см. useLayoutEffect
+                и RAF-цикл). При любом ререндере родителя React не трогает атрибут. */}
+            <textPath ref={textPathRef} href={`#${pathId}`} xmlSpace="preserve">
               {totalText}
             </textPath>
           </text>
