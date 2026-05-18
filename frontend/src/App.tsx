@@ -27,6 +27,9 @@ const DevPlayerBootstrapPage = lazy(() => import('./pages/DevPlayerBootstrapPage
 // Admin (narrator) панель — отдельный lazy-chunk, грузится только при /admin/*.
 const AdminPage = lazy(() => import('./pages/AdminPage'));
 const AdminOverviewPage = lazy(() => import('./pages/admin/AdminOverviewPage'));
+const TriggersListPage = lazy(() => import('./pages/admin/TriggersListPage'));
+const TriggerDetailPage = lazy(() => import('./pages/admin/TriggerDetailPage'));
+const TriggerCreatePage = lazy(() => import('./pages/admin/TriggerCreatePage'));
 
 // Dev-only UI showcase page. В production-build lazy-импорт dead-code-elim-ится
 // благодаря NODE_ENV-гварду (Terser). `process.env.NODE_ENV` — единственный
@@ -110,6 +113,9 @@ const router = createBrowserRouter([
     errorElement,
     children: [
       { index: true, element: withSuspense(<AdminOverviewPage />) },
+      { path: 'triggers', element: withSuspense(<TriggersListPage />) },
+      { path: 'triggers/new', element: withSuspense(<TriggerCreatePage />) },
+      { path: 'triggers/:id', element: withSuspense(<TriggerDetailPage />) },
     ],
   },
   ...devRoutes,
