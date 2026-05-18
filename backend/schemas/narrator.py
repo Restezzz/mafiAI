@@ -1,14 +1,23 @@
 """Pydantic-схемы admin narrator endpoint'ов.
 
-Содержат только READ-ONLY shape; create/update DTO добавляются позже в M3/M4
-(вместе с CRUD endpoint'ами).
+Содержит:
+- ``*Response`` — read-only shape для GET.
+- ``*Create`` / ``*Update`` — request body для POST/PUT.
+- ``*ListResponse`` — обёртки для коллекций.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+# Slug допускает [a-z0-9_], 1..80 символов. Совпадает с константой в narration_script.py.
+_SLUG_RE = re.compile(r"^[a-z0-9_]{1,80}$")
+# group_key для UI-секций (intro, night_mafia, finale и т.п.).
+_GROUP_KEY_RE = re.compile(r"^[a-z0-9_]{1,50}$")
 
 
 class AudioFileResponse(BaseModel):
@@ -97,3 +106,123 @@ class NameAssetsListResponse(BaseModel):
 
 class PlaceholdersListResponse(BaseModel):
     placeholders: list[PlaceholderInfo]
+
+
+# ---------------------------------------------------------------------------
+# Request bodies (POST / PUT)
+# ---------------------------------------------------------------------------
+
+
+class TriggerCreate(BaseModel):
+    """Создание нового триггера. ``kind`` после создания не меняется."""
+
+    slug: str = Field(..., min_length=1, max_length=80)
+    group_key: str = Field(..., min_length=1, max_length=50)
+    label: str = Field(..., min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=2000)
+    kind: Literal["variant", "composite"]
+
+    @field_validator("slug")
+    @classmethod
+    def _validate_slug(cls, v: str) -> str:
+        if not _SLUG_RE.match(v):
+            raise ValueError("slug должен быть [a-z0-9_], 1..80 символов")
+        return v
+
+    @field_validator("group_key")
+    @classmethod
+    def _validate_group_key(cls, v: str) -> str:
+        if not _GROUP_KEY_RE.match(v):
+            raise ValueError("group_key должен быть [a-z0-9_], 1..50 символов")
+        return v
+
+
+class TriggerUpdate(BaseModel):
+    """Обновление триггера. Поля ``slug`` и ``kind`` неизменяемы (иначе game_engine
+    integration и существующие variants/templates сломаются — придётся пересоздавать).
+    """
+
+    group_key: str | None = Field(default=None, min_length=1, max_length=50)
+    label: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("group_key")
+    @classmethod
+    def _validate_group_key(cls, v: str | None) -> str | None:
+        if v is not None and not _GROUP_KEY_RE.match(v):
+            raise ValueError("group_key должен быть [a-z0-9_], 1..50 символов")
+        return v
+
+
+class VariantCreate(BaseModel):
+    """Создание варианта для kind='variant' триггера.
+
+    ``audio_file_id=None`` → text-only вариант (typewriter без mp3).
+    ``text`` может содержать ``{placeholder_key}`` для подстановки на runtime.
+    """
+
+    audio_file_id: str | None = None
+    text: str = Field(..., min_length=1, max_length=4000)
+    duration_ms: int | None = Field(default=None, ge=0, le=300_000)
+    sort_order: int = Field(default=0, ge=0)
+
+
+class VariantUpdate(BaseModel):
+    audio_file_id: str | None = Field(default=None, description="None в JSON = НЕ менять; чтобы сбросить → audio_file_id='', либо передавать unset_audio=true")
+    text: str | None = Field(default=None, min_length=1, max_length=4000)
+    duration_ms: int | None = Field(default=None, ge=0, le=300_000)
+    sort_order: int | None = Field(default=None, ge=0)
+    # Явный флаг сброса аудио → text-only вариант.
+    unset_audio: bool = False
+
+
+class CompositeTemplateCreate(BaseModel):
+    label: str | None = Field(default=None, max_length=120)
+    sort_order: int = Field(default=0, ge=0)
+
+
+class CompositeTemplateUpdate(BaseModel):
+    label: str | None = Field(default=None, max_length=120)
+    sort_order: int | None = Field(default=None, ge=0)
+
+
+class CompositeSegmentCreate(BaseModel):
+    """Сегмент composite-template.
+
+    Инварианты (проверяются в endpoint'е):
+    - ``kind='audio'`` → ``audio_file_id`` обязателен, ``placeholder_key`` должен быть None.
+    - ``kind='placeholder'`` → ``placeholder_key`` обязателен (из catalog),
+      ``audio_file_id`` должен быть None.
+    """
+
+    position: int = Field(..., ge=0)
+    kind: Literal["audio", "placeholder"]
+    audio_file_id: str | None = None
+    placeholder_key: str | None = Field(default=None, max_length=60)
+    text_fragment: str = Field(default="", max_length=4000)
+
+
+class CompositeSegmentUpdate(BaseModel):
+    """PATCH-style: только переданные поля изменяются.
+
+    Не меняйте ``kind`` без сброса соответствующих полей —  endpoint валидирует
+    финальную консистентность после применения апдейта.
+    """
+
+    position: int | None = Field(default=None, ge=0)
+    kind: Literal["audio", "placeholder"] | None = None
+    audio_file_id: str | None = None
+    placeholder_key: str | None = Field(default=None, max_length=60)
+    text_fragment: str | None = Field(default=None, max_length=4000)
+    unset_audio: bool = False
+
+
+class NameAssetUpdate(BaseModel):
+    """Обновление имени-актива. ``slug`` пересчитывается, если меняется display_name."""
+
+    display_name: str | None = Field(default=None, min_length=1, max_length=60)
+    gender: Literal["m", "f"] | None = None
+    audio_file_id: str | None = Field(
+        default=None,
+        description="UUID существующего NarratorAudioFile. Полностью переиспользует mp3.",
+    )
