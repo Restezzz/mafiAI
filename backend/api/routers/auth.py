@@ -201,6 +201,7 @@ async def _me_response(user: User, db: AsyncSession) -> MeResponse:
         email=user.email,
         nickname=user.display_name,
         has_pro=await has_active_pro(db, user.id),
+        is_admin=user.is_admin,
         created_at=user.created_at.isoformat(),
         avatar_url=user.avatar_url,
     )

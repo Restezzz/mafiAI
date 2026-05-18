@@ -12,6 +12,14 @@ from models.subscription import Subscription
 from models.payment import Payment
 from models.refresh_token import RefreshToken
 from models.dev_test_lobby_link import DevTestLobbyLink
+from models.narrator import (
+    NarratorAudioFile,
+    NarratorTrigger,
+    NarratorVariant,
+    NarratorCompositeTemplate,
+    NarratorCompositeSegment,
+    NarratorNameAsset,
+)
 
 __all__ = [
     "User",
@@ -26,4 +34,10 @@ __all__ = [
     "Payment",
     "RefreshToken",
     "DevTestLobbyLink",
+    "NarratorAudioFile",
+    "NarratorTrigger",
+    "NarratorVariant",
+    "NarratorCompositeTemplate",
+    "NarratorCompositeSegment",
+    "NarratorNameAsset",
 ]

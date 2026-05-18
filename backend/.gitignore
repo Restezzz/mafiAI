@@ -48,3 +48,8 @@ docker-compose.override.yml
 
 # Логи
 *.log
+
+# Хранилище аудио narrator-системы (mp3 не коммитим, в production
+# монтируется как Docker volume; локально наполняется через migration script
+# или upload в админ-панели).
+audio_storage/

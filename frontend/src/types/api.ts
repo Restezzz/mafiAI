@@ -48,6 +48,9 @@ export interface UserProfile {
   email: string;
   nickname: string;
   has_pro: boolean;
+  // Доступ к админ-панели narrator. Возвращается /auth/me; при ручной
+  // конструкции после register/login считаем false (новый юзер не админ).
+  is_admin?: boolean;
   created_at: string;
   avatar_url?: string | null;
 }

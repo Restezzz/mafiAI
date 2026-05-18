@@ -119,7 +119,15 @@ export function useNarrationAudio(announcement: Announcement | null) {
         }
         const expectedSec = pos.offsetMs / 1000;
         const drift = audio.currentTime - expectedSec;
-        if (Math.abs(drift) > 0.25) {
+        // Догоняем серверное время ТОЛЬКО вперёд (drift < -0.25).
+        // Назад НЕ перематываем — иначе при clock skew (часы клиента отстают
+        // от сервера на >0.5с, типично для прода без жёсткого NTP) каждый
+        // тик loop'а получал бы expectedSec=0, audio.currentTime≈0.5,
+        // drift=+0.5 > 0.25 → seek в 0 → бесконечный repeat первой
+        // полсекунды каждые 500мс ("голос ребутит с начала фразы").
+        // Если audio немного впереди сервера, это нормально: либо clock skew,
+        // либо мы стартовали мгновенно, а сервер чуть запоздал — пусть играет.
+        if (drift < -0.25) {
           try {
             audio.currentTime = expectedSec;
           } catch {
