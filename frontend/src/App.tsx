@@ -24,6 +24,10 @@ const GamePage = lazy(() => import('./pages/GamePage'));
 const ProfilePage = lazy(() => import('./pages/ProfilePage'));
 const DevPlayerBootstrapPage = lazy(() => import('./pages/DevPlayerBootstrapPage'));
 
+// Admin (narrator) панель — отдельный lazy-chunk, грузится только при /admin/*.
+const AdminPage = lazy(() => import('./pages/AdminPage'));
+const AdminOverviewPage = lazy(() => import('./pages/admin/AdminOverviewPage'));
+
 // Dev-only UI showcase page. В production-build lazy-импорт dead-code-elim-ится
 // благодаря NODE_ENV-гварду (Terser). `process.env.NODE_ENV` — единственный
 // паттерн, который CRA/react-scripts надёжно распознаёт для tree-shaking.
@@ -56,6 +60,23 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/**
+ * AdminRoute — гейтирует /admin/* по флагу `user.is_admin` (см. /api/auth/me).
+ * Неавторизованного отправляет на /auth, авторизованного-не-админа — на /app.
+ */
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const user = useAuthStore((s) => s.user);
+
+  if (!isAuthenticated) {
+    return <Navigate to="/auth" replace />;
+  }
+  if (!user?.is_admin) {
+    return <Navigate to="/app" replace />;
+  }
+  return <>{children}</>;
+}
+
 // Data router (createBrowserRouter) обязателен для useBlocker в react-router-dom v7.
 // Обычный <BrowserRouter> / <Routes> — legacy, useBlocker в нём бросает invariant.
 // #26: errorElement подключён к каждому route. Exception в одной странице
@@ -83,6 +104,14 @@ const router = createBrowserRouter([
   { path: '/sessions/:code', element: <ProtectedRoute>{withSuspense(<LobbyPage />)}</ProtectedRoute>, errorElement },
   { path: '/sessions/:code/stories', element: <ProtectedRoute>{withSuspense(<StorySelectionPage />)}</ProtectedRoute>, errorElement },
   { path: '/game/:sessionId', element: <ProtectedRoute>{withSuspense(<GamePage />)}</ProtectedRoute>, errorElement },
+  {
+    path: '/admin',
+    element: <AdminRoute>{withSuspense(<AdminPage />)}</AdminRoute>,
+    errorElement,
+    children: [
+      { index: true, element: withSuspense(<AdminOverviewPage />) },
+    ],
+  },
   ...devRoutes,
   { path: '*', element: <Navigate to="/" replace /> },
 ]);
