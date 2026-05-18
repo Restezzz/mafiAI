@@ -69,15 +69,25 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AI-GameMaster", lifespan=lifespan)
 
-# Mount хранилища аудио narrator'а. mkdir(exist_ok=True) идемпотентен — папка
-# может уже существовать (Docker volume, повторный запуск). Создаём до mount'а,
-# иначе Starlette.StaticFiles в первом запросе кинет RuntimeError("directory ... does not exist").
-settings.audio_storage_path.mkdir(parents=True, exist_ok=True)
-app.mount(
-    "/audio",
-    StaticFiles(directory=str(settings.audio_storage_path)),
-    name="narrator_audio",
-)
+# Mount хранилища аудио narrator'а. Любая ошибка здесь (нет прав на mkdir,
+# volume не смонтирован, кривой AUDIO_STORAGE_ROOT) НЕ должна валить весь
+# backend — иначе uvicorn падает при импорте main.py и nginx отдаёт 502
+# на ВСЕ запросы, включая /auth/login. Логируем и пропускаем mount —
+# фронт временно потеряет аудио, но core-функциональность останется живой.
+try:
+    settings.audio_storage_path.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        "/audio",
+        StaticFiles(directory=str(settings.audio_storage_path)),
+        name="narrator_audio",
+    )
+except Exception:
+    log_exception(
+        logger,
+        "app.audio_mount_failed",
+        "Failed to mount /audio StaticFiles — narrator audio will be unavailable",
+        audio_storage_root=str(settings.AUDIO_STORAGE_ROOT),
+    )
 
 # Rate limiter: ставим до CORS и логирования, чтобы 429 уходил без полной обработки.
 # Лимиты per-route задаются декоратором @limiter.limit(...) в роутерах.
@@ -159,7 +169,6 @@ from api.routers.game import router as game_router
 from api.routers.logs import router as logs_router
 from api.routers.observability import router as observability_router
 from api.routers.subscriptions import router as subscriptions_router
-from api.routers.admin_narrator import router as admin_narrator_router
 from api.websockets.ws import router as ws_router
 if settings.APP_ENV == "development":
     from api.routers.dev import router as dev_router
@@ -171,7 +180,20 @@ app.include_router(game_router, prefix="/api/sessions", tags=["game"])
 app.include_router(logs_router, prefix="/api/logs", tags=["logs"])
 app.include_router(observability_router, prefix="/api/observability", tags=["observability"])
 app.include_router(subscriptions_router, prefix="/api/subscriptions", tags=["subscriptions"])
-app.include_router(admin_narrator_router, prefix="/api/admin/narrator", tags=["admin-narrator"])
+# admin_narrator-роутер изолируем: его импорт тянет models.narrator + services
+# narrator_*, которые требуют применённых миграций (narrator_tables, is_admin).
+# Если миграции не накатились / схема рассинхронизирована — импорт упадёт и
+# уронит весь uvicorn → nginx отдаст 502 на /auth/login. Логируем и пропускаем,
+# admin-панель временно недоступна, остальное API работает.
+try:
+    from api.routers.admin_narrator import router as admin_narrator_router
+    app.include_router(admin_narrator_router, prefix="/api/admin/narrator", tags=["admin-narrator"])
+except Exception:
+    log_exception(
+        logger,
+        "app.admin_narrator_disabled",
+        "Failed to import admin_narrator router — admin panel will be unavailable",
+    )
 app.include_router(ws_router, prefix="/ws", tags=["ws"])
 if settings.APP_ENV == "development":
     app.include_router(dev_router, prefix="/api/dev", tags=["dev"])
