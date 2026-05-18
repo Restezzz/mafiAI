@@ -26,10 +26,13 @@ def test_remaining_seconds_normal():
     assert 19 <= result <= 21
 
 
-def test_remaining_seconds_negative_when_expired():
+def test_remaining_seconds_clamped_to_zero_when_expired():
+    # remaining_seconds зажимает результат через max(0, ...), чтобы фронт не
+    # видел отрицательные таймеры (см. core/utils.py). При expired-таймере
+    # ожидаем ровно 0, а не отрицательное значение.
     started = datetime.now(timezone.utc) - timedelta(seconds=100)
     result = remaining_seconds(30, started)
-    assert result < 0
+    assert result == 0
 
 
 def test_remaining_seconds_none_when_timer_none():
