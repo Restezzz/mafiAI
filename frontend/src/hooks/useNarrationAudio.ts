@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useAudioStore } from '../stores/audioStore';
 import type { Announcement, AudioSegment } from '../types/game';
 import { resolvePreloadedAudioUrl } from '../utils/audioPreloader';
+import { serverNow } from '../utils/serverClock';
 
 const HAVE_FUTURE_DATA = 3;
 const PLAYABLE_WAIT_TIMEOUT_MS = 2500;
@@ -63,7 +64,7 @@ export function useNarrationAudio(announcement: Announcement | null) {
     const startedAtMs = announcement.started_at ? Date.parse(announcement.started_at) : NaN;
 
     // Если уже на старте позиция за пределами всех сегментов — ничего не играем.
-    const initial = pickPosition(segments, startedAtMs, Date.now());
+    const initial = pickPosition(segments, startedAtMs, serverNow());
     if (!initial) return;
 
     const audio = new Audio();
@@ -112,7 +113,7 @@ export function useNarrationAudio(announcement: Announcement | null) {
       driftTimer = setInterval(() => {
         if (cancelled) return;
         if (audio.paused || audio.seeking || audio.readyState < HAVE_FUTURE_DATA) return;
-        const pos = pickPosition(segments, startedAtMs, Date.now());
+        const pos = pickPosition(segments, startedAtMs, serverNow());
         if (!pos) return; // Пусть сегмент доиграется до конца естественно.
         if (pos.index !== currentIndex) return; // Не переключаемся, ждём onEnded.
         const expectedSec = pos.offsetMs / 1000;
@@ -143,7 +144,7 @@ export function useNarrationAudio(announcement: Announcement | null) {
         gestureCleanup = null;
         if (cancelled) return;
         setNeedsGesture(false);
-        const pos = pickPosition(segments, startedAtMs, Date.now());
+        const pos = pickPosition(segments, startedAtMs, serverNow());
         if (!pos) {
           // Пока ждали жеста, всё уже отзвучало по серверу — не играем.
           setCurrentSegmentIndex(-1);
@@ -204,7 +205,7 @@ export function useNarrationAudio(announcement: Announcement | null) {
         // как onEnded честно продвинул нас вперёд → симптом "после имени
         // снова первая часть" в composite-фразе.
         if (Number.isFinite(startedAtMs)) {
-          const pos = pickPosition(segments, startedAtMs, Date.now());
+          const pos = pickPosition(segments, startedAtMs, serverNow());
           if (pos && pos.index === idx) {
             offsetMs = pos.offsetMs;
           }
@@ -219,7 +220,7 @@ export function useNarrationAudio(announcement: Announcement | null) {
         await waitForPlayable(audio, isStale);
         if (isStale()) return;
         if (Number.isFinite(startedAtMs)) {
-          const pos = pickPosition(segments, startedAtMs, Date.now());
+          const pos = pickPosition(segments, startedAtMs, serverNow());
           if (pos && pos.index === idx) {
             offsetMs = pos.offsetMs;
             try {

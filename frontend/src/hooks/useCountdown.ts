@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { serverNow } from '../utils/serverClock';
 
 export interface CountdownConfig {
   enabled?: boolean;
@@ -22,7 +23,12 @@ export function computeRemainingSeconds(
     return timerSeconds;
   }
 
-  const elapsed = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
+  // serverNow() = Date.now() + offset. offset обновляется через
+  // updateOffsetFromServerNow в wsClient на каждый incoming WS frame.
+  // Без этого при skew >1с (наблюдалось +25с на проде VPS) elapsed=0
+  // и таймер замерзает на полную длительность skew, пока клиентские
+  // часы не догонят.
+  const elapsed = Math.max(0, Math.floor((serverNow() - startedMs) / 1000));
   return Math.max(0, timerSeconds - elapsed);
 }
 

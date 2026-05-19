@@ -6,6 +6,7 @@ import { SessionSettings } from '../types/game';
 import { AudioPreloadStatusResponse, PlayerInList } from '../types/api';
 import { logger } from '../services/logger';
 import { navigateTo } from '../utils/routerRef';
+import { updateOffsetFromServerNow } from '../utils/serverClock';
 
 /**
  * Синглтон WebSocket-клиента для игровой сессии.
@@ -301,6 +302,17 @@ class WsClient {
             payload: parsed,
           }, { sessionId });
           return;
+        }
+
+        // Каждое WS-сообщение от сервера несёт server_now (UTC ISO) — см.
+        // backend/services/ws_manager.py::_stamp_server_now. Обновляем
+        // глобальный clock offset, чтобы все time-зависимые компоненты
+        // (useCountdown, useNarrationAudio, NarratorScreen) могли
+        // сравнивать серверные timestamps через serverNow(), а не Date.now()
+        // — это убирает замерзание таймера/караоке при clock skew.
+        const serverNow = typeof parsed.server_now === 'string' ? parsed.server_now : null;
+        if (serverNow) {
+          updateOffsetFromServerNow(serverNow);
         }
 
         this.dispatch({

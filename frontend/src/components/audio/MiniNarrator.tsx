@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNarrationAudio } from '../../hooks/useNarrationAudio';
 import type { Announcement } from '../../types/game';
+import { serverNow } from '../../utils/serverClock';
 import './MiniNarrator.scss';
 
 // Дефолт — для text-only fallback (без аудио). Когда есть duration_ms,
@@ -50,22 +51,22 @@ export default function MiniNarrator({ announcement }: Props) {
   // Lazy initializer: на mount/reconnect стартуем с уже корректной позиции,
   // чтобы не было кадра с "0 chars" перед первым tick.
   const [displayedChars, setDisplayedChars] = useState(() =>
-    computeChars(text.length, startedAtMs, Date.now(), durationMs)
+    computeChars(text.length, startedAtMs, serverNow(), durationMs)
   );
   const [progress, setProgress] = useState(() =>
     computeProgressPct(
       text.length,
       startedAtMs,
-      Date.now(),
+      serverNow(),
       durationMs,
-      computeChars(text.length, startedAtMs, Date.now(), durationMs),
+      computeChars(text.length, startedAtMs, serverNow(), durationMs),
     )
   );
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Пересчёт при смене announcement.key — догоняем текущую позицию.
   useEffect(() => {
-    const now = Date.now();
+    const now = serverNow();
     const chars = computeChars(text.length, startedAtMs, now, durationMs);
     setDisplayedChars(chars);
     setProgress(computeProgressPct(text.length, startedAtMs, now, durationMs, chars));
@@ -80,7 +81,7 @@ export default function MiniNarrator({ announcement }: Props) {
     if (!announcementKey || !text) return;
 
     const tick = () => {
-      const now = Date.now();
+      const now = serverNow();
       const chars = computeChars(text.length, startedAtMs, now, durationMs);
       setDisplayedChars((prev) => (chars > prev ? chars : prev));
       setProgress(computeProgressPct(text.length, startedAtMs, now, durationMs, chars));
