@@ -298,6 +298,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const { useGameStore: gStore } = await getGameStore();
     const sessionId = state.session?.id ?? gStore.getState().sessionId;
     if (!sessionId) return;
+
+    // Optimistic update: мгновенно меняем UI чтобы пользователь не ждал
+    // round-trip POST + WS broadcast (60-200ms на проде). Без этого хост
+    // жмёт кнопку и видит "ничего не происходит" пока WS `game_paused`
+    // не дойдёт. WS-обработчики (game_paused/game_resumed) перезатрут наше
+    // значение тем же — race-safe. На случай ошибки API ниже откатываем.
+    const previousPaused = state.timerPaused;
+    set({ timerPaused: paused });
+
     try {
       if (paused) {
         await sessionApi.pause(sessionId);
@@ -308,9 +317,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         sessionId,
       }, { sessionId });
     } catch {
-      // Если бек вернул ошибку (уже на паузе / не на паузе) — пробуем всё равно
-      // синхронизировать локальное состояние через WS.
-      logger.warn('api.nonfatal_failure', 'Pause/resume request failed, waiting for WS sync', {
+      // Откат optimistic update — реальное состояние не изменилось.
+      // Если бек вернул 409 (already_paused / not_paused) — значит мы
+      // уже синхронизированы, WS-сообщение от первой попытки придёт само.
+      set({ timerPaused: previousPaused });
+      logger.warn('api.nonfatal_failure', 'Pause/resume request failed, reverting optimistic update', {
         sessionId,
         paused,
       }, { sessionId });
