@@ -6,11 +6,28 @@ import asyncio
 import logging
 import uuid
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from fastapi import WebSocket
 from core.logging import log_event
 
 logger = logging.getLogger(__name__)
+
+
+def _stamp_server_now(message: dict) -> dict:
+    """Возвращает копию message с полем `server_now` (UTC ISO8601).
+
+    Нужен для компенсации clock skew клиента: фронт сравнивает все серверные
+    timestamps (timer_started_at, announcement.started_at) с Date.now(), но
+    локальные часы клиента и хоста backend могут расходиться на десятки
+    секунд (известный случай: VPS без NTP-синка опережает client на ~25с).
+    Каждое WS-сообщение несёт серверный момент отправки → фронт обновляет
+    свой offset (`serverNow - clientNow`) и применяет его ко всем
+    сравнениям, чтобы karaoke/таймер не замерзали при skew >1с.
+    """
+    if "server_now" in message:
+        return message
+    return {**message, "server_now": datetime.now(timezone.utc).isoformat()}
 
 
 class ConnectionManager:
@@ -33,9 +50,11 @@ class ConnectionManager:
         if not connections:
             return
 
+        stamped = _stamp_server_now(message)
+
         async def _send(user_id: uuid.UUID, ws: WebSocket) -> uuid.UUID | None:
             try:
-                await ws.send_json(message)
+                await ws.send_json(stamped)
                 return None
             except Exception:
                 log_event(
@@ -58,7 +77,7 @@ class ConnectionManager:
         if not ws:
             return
         try:
-            await ws.send_json(message)
+            await ws.send_json(_stamp_server_now(message))
         except Exception:
             log_event(
                 logger,

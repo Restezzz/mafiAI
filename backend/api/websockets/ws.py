@@ -16,6 +16,7 @@ import asyncio
 import logging
 import time
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Query, WebSocket
 from fastapi.websockets import WebSocketDisconnect
@@ -32,8 +33,15 @@ from services.ws_manager import ws_manager
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_PONG_RESPONSE = {"type": "pong", "payload": {}}
-_PING_FRAME = {"type": "ping", "payload": {}}
+# Все WS-фреймы должны нести server_now (см. ws_manager._stamp_server_now).
+# pong и ping шлются напрямую через ws.send_json, минуя ws_manager, поэтому
+# stamp'аем их вручную здесь.
+def _pong_response() -> dict:
+    return {"type": "pong", "payload": {}, "server_now": datetime.now(timezone.utc).isoformat()}
+
+
+def _ping_frame() -> dict:
+    return {"type": "ping", "payload": {}, "server_now": datetime.now(timezone.utc).isoformat()}
 
 WS_PING_INTERVAL_SECONDS = 30.0
 WS_PONG_TIMEOUT_SECONDS = 60.0
@@ -98,7 +106,7 @@ async def websocket_endpoint(
                     break
                 # Шлём ping; если send упадёт — выходим, в finally дисконнект.
                 try:
-                    await websocket.send_json(_PING_FRAME)
+                    await websocket.send_json(_ping_frame())
                 except Exception:
                     break
                 continue
@@ -107,7 +115,7 @@ async def websocket_endpoint(
             last_seen = time.monotonic()
             msg_type = data.get("type") if isinstance(data, dict) else None
             if msg_type == "ping":
-                await websocket.send_json(_PONG_RESPONSE)
+                await websocket.send_json(_pong_response())
             elif msg_type == "pong":
                 # Ответ на наш ping — last_seen уже обновлён.
                 pass

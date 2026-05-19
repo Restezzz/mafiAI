@@ -3,6 +3,7 @@ import { useGameStore } from '../../stores/gameStore';
 import { useNarrationAudio } from '../../hooks/useNarrationAudio';
 import AmbientBackground from '../ui/AmbientBackground';
 import ProgressBar from '../ui/ProgressBar';
+import { serverNow } from '../../utils/serverClock';
 import './NarratorScreen.scss';
 
 // Дефолтный шаг — используется только если нет duration_ms у announcement
@@ -56,24 +57,24 @@ export default function NarratorScreen() {
   // Сразу при mount/смене announcement — догоняем то место, где должен быть typewriter
   // согласно server-time. Это синхронизирует разные клиенты и refresh-нутые вкладки.
   const [displayedChars, setDisplayedChars] = useState(() =>
-    computeDisplayedChars(currentText.length, startedAtMs, Date.now(), durationMs)
+    computeDisplayedChars(currentText.length, startedAtMs, serverNow(), durationMs)
   );
   const [progress, setProgress] = useState(() =>
     computeProgress(
       durationMs,
       startedAtMs,
       currentText.length,
-      computeDisplayedChars(currentText.length, startedAtMs, Date.now(), durationMs),
-      Date.now(),
+      computeDisplayedChars(currentText.length, startedAtMs, serverNow(), durationMs),
+      serverNow(),
     )
   );
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // При смене announcement пересчитать «откуда продолжать».
   useEffect(() => {
-    const next = computeDisplayedChars(currentText.length, startedAtMs, Date.now(), durationMs);
+    const next = computeDisplayedChars(currentText.length, startedAtMs, serverNow(), durationMs);
     setDisplayedChars(next);
-    setProgress(computeProgress(durationMs, startedAtMs, currentText.length, next, Date.now()));
+    setProgress(computeProgress(durationMs, startedAtMs, currentText.length, next, serverNow()));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [announcementKey]);
 
@@ -81,7 +82,7 @@ export default function NarratorScreen() {
     if (!currentText) return undefined;
 
     const tick = () => {
-      const now = Date.now();
+      const now = serverNow();
       const nextChars = computeDisplayedChars(currentText.length, startedAtMs, now, durationMs);
       setDisplayedChars((prev) => (nextChars > prev ? nextChars : prev));
       setProgress(computeProgress(durationMs, startedAtMs, currentText.length, nextChars, now));

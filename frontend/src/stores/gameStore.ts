@@ -573,13 +573,26 @@ export const useGameStore = create<GameState>((set, get) => ({
       return;
     }
     const sessionStatus = phasePayload.session_status;
-    const awaitingAction: boolean = phasePayload.awaiting_action ?? false;
-    const incomingActionType: NightActionType | null = phasePayload.action_type ?? null;
-    const incomingTargets: Target[] = phasePayload.available_targets ?? [];
     const announcement: Announcement | null = phasePayload.announcement ?? null;
 
+    // Поля action-окна (awaiting_action, action_type, available_targets) могут
+    // отсутствовать в payload — например, для `game_resumed`, который шлёт
+    // только phase + timer (action_required прилетит отдельным событием от
+    // execute_night_sequence). В таком случае НЕ затираем текущее окно
+    // нулями: иначе плашки игроков (availableTargets) исчезают сразу после
+    // resume, и юзер не может выбрать жертву, пока не придёт action_required.
     set((state) => {
       if (state.screen === 'finale' || state.result) return state;
+      const awaitingAction: boolean =
+        phasePayload.awaiting_action ?? state.awaitingAction ?? false;
+      const incomingActionType: NightActionType | null =
+        phasePayload.action_type !== undefined ? phasePayload.action_type : state.actionType;
+      // `?? state.availableTargets` покрывает оба случая отсутствия поля:
+      // undefined (поле не отправлено backend'ом) И null (явно очищено).
+      // Затирать `[]` нельзя — иначе плашки исчезают после game_resumed.
+      const incomingTargets: Target[] =
+        phasePayload.available_targets ?? state.availableTargets;
+
       const nextAnnouncement = resolveAnnouncement(state.currentAnnouncement, announcement);
       const sameActionWindow =
         actionWindowIdentity(state.phase, state.actionType) === actionWindowIdentity(phase, incomingActionType);

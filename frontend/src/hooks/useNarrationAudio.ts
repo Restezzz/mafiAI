@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useAudioStore } from '../stores/audioStore';
 import type { Announcement, AudioSegment } from '../types/game';
 import { resolvePreloadedAudioUrl } from '../utils/audioPreloader';
+import { serverNow } from '../utils/serverClock';
 
 const HAVE_FUTURE_DATA = 3;
 const PLAYABLE_WAIT_TIMEOUT_MS = 2500;
@@ -63,7 +64,7 @@ export function useNarrationAudio(announcement: Announcement | null) {
     const startedAtMs = announcement.started_at ? Date.parse(announcement.started_at) : NaN;
 
     // Если уже на старте позиция за пределами всех сегментов — ничего не играем.
-    const initial = pickPosition(segments, startedAtMs, Date.now());
+    const initial = pickPosition(segments, startedAtMs, serverNow());
     if (!initial) return;
 
     const audio = new Audio();
@@ -94,44 +95,34 @@ export function useNarrationAudio(announcement: Announcement | null) {
     const startDriftLoop = () => {
       stopDriftLoop();
       // Без валидного startedAtMs нет серверного эталона — drift-loop
-      // некорректен (pickPosition всегда вернёт {0,0} и мы будем перематывать
-      // в начало). Просто играем естественно через onEnded → idx+1.
+      // некорректен. Просто играем естественно через onEnded → idx+1.
       if (!Number.isFinite(startedAtMs)) return;
-      // Раз в 500мс сравниваем audio.currentTime с серверным expected.
-      // При расхождении >250мс — seek; если elapsed ушёл за пределы текущего
-      // сегмента — переходим к актуальному (или останавливаемся, если всё
-      // отзвучало по серверу).
+      // Раз в 500мс сравниваем audio.currentTime с server-time ВНУТРИ текущего
+      // сегмента и догоняем только вперёд при сильном отставании (>1с).
+      // Намеренно НЕ переключаем индексы из drift-loop:
+      //   1. Часы клиента и сервера почти всегда расходятся (NTP drift,
+      //      VM clock skew). pickPosition по client clock мог бы вернуть
+      //      pos.index=N+1 пока audio ещё в N — мы бы прервали середину
+      //      фразы, а потом onEnded на укороченном сегменте тоже
+      //      пересчитывал бы и попадал не туда.
+      //   2. Composite-фразы [opener][имя][closer] коротки (3-4 сегмента,
+      //      <10с общая длительность). Естественный плейлист (играем до
+      //      onEnded → idx+1) воспроизводит их корректно без скачков.
+      // Threshold 1с (а не 250мс) — заведомо больше типового clock skew,
+      // но достаточно мал, чтобы догонять реальные сетевые провисы.
       driftTimer = setInterval(() => {
         if (cancelled) return;
         if (audio.paused || audio.seeking || audio.readyState < HAVE_FUTURE_DATA) return;
-        const pos = pickPosition(segments, startedAtMs, Date.now());
-        if (!pos) {
-          stopDriftLoop();
-          try { audio.pause(); } catch { /* noop */ }
-          setCurrentSegmentIndex(-1);
-          setCurrentFileName(null);
-          return;
-        }
-        if (pos.index !== currentIndex) {
-          // Серверное время ушло на следующий сегмент — переключаемся.
-          playFrom(pos.index, pos.offsetMs);
-          return;
-        }
+        const pos = pickPosition(segments, startedAtMs, serverNow());
+        if (!pos) return; // Пусть сегмент доиграется до конца естественно.
+        if (pos.index !== currentIndex) return; // Не переключаемся, ждём onEnded.
         const expectedSec = pos.offsetMs / 1000;
         const drift = audio.currentTime - expectedSec;
-        // Догоняем серверное время ТОЛЬКО вперёд (drift < -0.25).
-        // Назад НЕ перематываем — иначе при clock skew (часы клиента отстают
-        // от сервера на >0.5с, типично для прода без жёсткого NTP) каждый
-        // тик loop'а получал бы expectedSec=0, audio.currentTime≈0.5,
-        // drift=+0.5 > 0.25 → seek в 0 → бесконечный repeat первой
-        // полсекунды каждые 500мс ("голос ребутит с начала фразы").
-        // Если audio немного впереди сервера, это нормально: либо clock skew,
-        // либо мы стартовали мгновенно, а сервер чуть запоздал — пусть играет.
-        if (drift < -0.25) {
+        if (drift < -1.0) {
           try {
             audio.currentTime = expectedSec;
           } catch {
-            /* noop — некоторые браузеры могут бросить, переживём */
+            /* noop */
           }
         }
       }, 500);
@@ -153,7 +144,7 @@ export function useNarrationAudio(announcement: Announcement | null) {
         gestureCleanup = null;
         if (cancelled) return;
         setNeedsGesture(false);
-        const pos = pickPosition(segments, startedAtMs, Date.now());
+        const pos = pickPosition(segments, startedAtMs, serverNow());
         if (!pos) {
           // Пока ждали жеста, всё уже отзвучало по серверу — не играем.
           setCurrentSegmentIndex(-1);
@@ -206,23 +197,17 @@ export function useNarrationAudio(announcement: Announcement | null) {
       const seekAndPlay = async () => {
         if (isStale()) return;
         let offsetMs = fallbackOffsetMs;
-        // Пересчитываем offset «здесь и сейчас» — за время load() могло
-        // уйти 100мс+ (HMR throttling, Safari tab throttling и т.п.).
-        // Если startedAtMs невалиден — нет серверного эталона, играем с
-        // fallbackOffsetMs (обычно 0 для последующих сегментов).
+        // Пересчитываем offset ВНУТРИ idx «здесь и сейчас» — за время load()
+        // могло уйти 100мс+ (HMR throttling, Safari tab throttling и т.п.).
+        // НЕ переключаем idx через pickPosition: при clock skew клиента
+        // pickPosition может вернуть pos.index < idx (ещё внутри предыдущего
+        // сегмента по серверу), и мы бы откатились назад прямо после того,
+        // как onEnded честно продвинул нас вперёд → симптом "после имени
+        // снова первая часть" в composite-фразе.
         if (Number.isFinite(startedAtMs)) {
-          const pos = pickPosition(segments, startedAtMs, Date.now());
+          const pos = pickPosition(segments, startedAtMs, serverNow());
           if (pos && pos.index === idx) {
             offsetMs = pos.offsetMs;
-          } else if (pos && pos.index !== idx) {
-            // Сервер уже на следующем сегменте — перепрыгиваем туда.
-            playFrom(pos.index, pos.offsetMs);
-            return;
-          } else if (!pos) {
-            // Всё уже отзвучало.
-            setCurrentSegmentIndex(-1);
-            setCurrentFileName(null);
-            return;
           }
         }
         if (offsetMs > 0) {
@@ -235,7 +220,7 @@ export function useNarrationAudio(announcement: Announcement | null) {
         await waitForPlayable(audio, isStale);
         if (isStale()) return;
         if (Number.isFinite(startedAtMs)) {
-          const pos = pickPosition(segments, startedAtMs, Date.now());
+          const pos = pickPosition(segments, startedAtMs, serverNow());
           if (pos && pos.index === idx) {
             offsetMs = pos.offsetMs;
             try {
@@ -243,13 +228,6 @@ export function useNarrationAudio(announcement: Announcement | null) {
             } catch {
               /* noop */
             }
-          } else if (pos && pos.index !== idx) {
-            playFrom(pos.index, pos.offsetMs);
-            return;
-          } else if (!pos) {
-            setCurrentSegmentIndex(-1);
-            setCurrentFileName(null);
-            return;
           }
         }
         const playPromise = audio.play();
@@ -281,20 +259,15 @@ export function useNarrationAudio(announcement: Announcement | null) {
 
     const onEnded = () => {
       if (cancelled) return;
-      // Без серверного эталона переходим на следующий сегмент по порядку.
-      // С эталоном — пересчитываем актуальную позицию и пропускаем
-      // промежуточные сегменты, если сервер уже ушёл дальше.
-      if (!Number.isFinite(startedAtMs)) {
-        playFrom(currentIndex + 1, 0);
-        return;
-      }
-      const pos = pickPosition(segments, startedAtMs, Date.now());
-      if (!pos) {
-        setCurrentSegmentIndex(-1);
-        setCurrentFileName(null);
-        return;
-      }
-      playFrom(pos.index, pos.offsetMs);
+      // Естественный плейлист: после конца сегмента — следующий по индексу
+      // с offset=0. НЕ зовём pickPosition: при clock skew (часы клиента
+      // отстают от server-time) она вернёт {currentIndex, offsetMs<dur}
+      // и playFrom перезагрузит ТОТ ЖЕ сегмент. Симптом этого бага в проде:
+      // в composite-фразе [opener][имя][closer] после opener'а снова играл
+      // opener вместо имени. Audio уже доиграл сегмент до конца — всегда
+      // идём дальше, а initial-pickup для refresh уже отработал в первом
+      // playFrom выше.
+      playFrom(currentIndex + 1, 0);
     };
 
     audio.addEventListener('ended', onEnded);
