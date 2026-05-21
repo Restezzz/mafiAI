@@ -38,6 +38,12 @@ export default function HomePage() {
   const navigate = useNavigate();
   usePageViewLogger('HomePage');
 
+  // Кнопка тестового лобби: в dev любому залогиненному, в проде только админам.
+  // Backend гейт `require_admin_or_dev_env` дублирует это правило — фронт лишь
+  // прячет UI чтобы не светить заведомо 403-абельную кнопку.
+  const isAdmin = useAuthStore((s) => s.user?.is_admin === true);
+  const canCreateTestLobby = APP_ENV === 'development' || isAdmin;
+
   const updateRoleConfig = (key: keyof RoleConfig, value: number) => {
     setCreateSettings((s) => ({
       ...s,
@@ -207,7 +213,7 @@ export default function HomePage() {
             </span>
           </button>
         </div>
-        {APP_ENV === 'development' && (
+        {canCreateTestLobby && (
           <button
             type="button"
             className="home-test-lobby"

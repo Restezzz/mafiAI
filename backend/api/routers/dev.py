@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from api.deps import get_current_user, get_db
+from api.deps import get_db, require_admin_or_dev_env
 from core.exceptions import GameError
 from core.logging import log_event, set_log_context
 from models.dev_test_lobby_link import DevTestLobbyLink
@@ -80,7 +80,7 @@ async def _get_dev_test_session_or_404(db: AsyncSession, session_id: uuid.UUID) 
 
 @router.post("/test-lobbies", response_model=SessionDetailResponse, status_code=201)
 async def create_test_lobby(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin_or_dev_env),
     db: AsyncSession = Depends(get_db),
 ) -> SessionDetailResponse:
     current_user_id = current_user.id
@@ -145,7 +145,7 @@ async def create_test_lobby(
 @router.post("/test-lobbies/{session_id}/expand", response_model=SessionDetailResponse)
 async def expand_test_lobby(
     session_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin_or_dev_env),
     db: AsyncSession = Depends(get_db),
 ) -> SessionDetailResponse:
     current_user_id = current_user.id
@@ -212,7 +212,7 @@ MIN_TEST_LOBBY_PLAYER_COUNT = 3
 @router.post("/test-lobbies/{session_id}/shrink", response_model=SessionDetailResponse)
 async def shrink_test_lobby(
     session_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin_or_dev_env),
     db: AsyncSession = Depends(get_db),
 ) -> SessionDetailResponse:
     current_user_id = current_user.id

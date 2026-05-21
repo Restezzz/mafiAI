@@ -11,6 +11,7 @@ from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.config import settings
 from core.database import get_async_session
 from core.exceptions import GameError
 from core.logging import set_log_context
@@ -136,3 +137,15 @@ async def require_admin(current_user: User = Depends(get_current_user)) -> User:
     if not current_user.is_admin:
         raise GameError(403, "forbidden", "Доступ только для администраторов")
     return current_user
+
+
+async def require_admin_or_dev_env(current_user: User = Depends(get_current_user)) -> User:
+    """Гейт для dev-функционала (синтетические тест-лобби).
+
+    Локально (APP_ENV != "production") пускаем любого залогиненного юзера —
+    разработчику не нужно выдавать ``is_admin`` чтобы пользоваться кнопкой
+    создания тест-лобби. На проде эндпоинт открыт только админам.
+    """
+    if settings.APP_ENV != "production" or current_user.is_admin:
+        return current_user
+    raise GameError(403, "forbidden", "Доступ только для администраторов")
