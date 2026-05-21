@@ -193,8 +193,9 @@ async def resume_game(session_id: uuid.UUID) -> None:
 
     if ptype == "night":
         nt = str(snap.get("night_turn") or "mafia")
-        rt.timer_started_at = utc_now()
-        rt.timer_seconds = rem
+
+        # WS отправляем В ЛЮБОМ СЛУЧАЕ — фронту нужно сразу снять `timerPaused`,
+        # независимо от того, продолжит ли старая корутина или мы запустим новую.
         await ws_manager.send_to_session(
             session_id,
             {
@@ -203,18 +204,61 @@ async def resume_game(session_id: uuid.UUID) -> None:
                     "phase": {"type": "night", "number": int(snap.get("phase_number") or 0)},
                     "night_turn": nt,
                     "timer_seconds": rem,
-                    "timer_started_at": rt.timer_started_at.isoformat(),
+                    "timer_started_at": utc_now().isoformat(),
                     "announcement": {"trigger": "game_resumed"},
                 },
             },
         )
-        async with async_session_factory() as db2:
-            s2 = await db2.get(Session, session_id)
-            ph2 = await db2.get(GamePhase, phase_id_uuid)
-            if not s2 or not ph2:
-                return
-            log_event(logger, logging.INFO, "game.resumed", "Night phase resumed from pause", session_id=str(session_id))
-            await execute_night_sequence(db2, s2, ph2, resume_from=(nt, rem))
+
+        # КРИТИЧНО: если предыдущая корутина `execute_night_sequence` /
+        # `transition_to_night` ещё активна (она зависла в `_wait_or_pause`
+        # и сейчас разбудится от `resume_event.set()` выше) — НЕ запускать
+        # новую. Иначе:
+        #   * intro/outro announcements играются дважды
+        #   * `action_required` отправляется дважды
+        #   * `start_timer(name, ...)` перезатирает существующий таймер
+        #   * два `night_action_event.wait()` ожидателя на один event
+        # Это race с пропуском в `_run_turn` после `await event.wait()`,
+        # когда `if rt.game_paused: return "paused"` ещё не успевает увидеть
+        # пометку от `pause_game` (окно ~единиц мс между cancel_timer и
+        # проверкой). В этом случае старая корутина уходит в outro
+        # `_play_phase_announcements`, блокируется в `_wait_or_pause`,
+        # а `resume_game` без проверки ниже стартует параллельную корутину.
+        #
+        # Старая корутина управляет `rt.timer_started_at/timer_seconds` сама
+        # (для следующего хода) — не перетираем эти поля, чтобы не сбить
+        # таймер, который старая корутина проставила за миллисекунды до
+        # нашей проверки.
+        if rt.night_sequence_running:
+            log_event(
+                logger,
+                logging.INFO,
+                "game.resumed",
+                "Night phase resumed (existing coroutine continues)",
+                session_id=str(session_id),
+            )
+            return
+
+        # Старая корутина уже завершилась (вышла через
+        # `if rt.game_paused: return "paused"` ДО того как мы успели нажать
+        # resume) — запускаем новую с resume_from. Флаг
+        # `night_sequence_running` защищает от расы с `recovery_loop`,
+        # который иначе может запустить ещё одну параллельную копию.
+        rt.timer_started_at = utc_now()
+        rt.timer_seconds = rem
+        rt.night_sequence_running = True
+        try:
+            async with async_session_factory() as db2:
+                s2 = await db2.get(Session, session_id)
+                ph2 = await db2.get(GamePhase, phase_id_uuid)
+                if not s2 or not ph2:
+                    return
+                log_event(
+                    logger, logging.INFO, "game.resumed", "Night phase resumed from pause", session_id=str(session_id)
+                )
+                await execute_night_sequence(db2, s2, ph2, resume_from=(nt, rem))
+        finally:
+            rt.night_sequence_running = False
         return
 
     raise GameError(500, "internal_error", "Неизвестный тип фазы в снимке паузы")
