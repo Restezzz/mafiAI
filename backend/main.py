@@ -169,9 +169,8 @@ from api.routers.game import router as game_router
 from api.routers.logs import router as logs_router
 from api.routers.observability import router as observability_router
 from api.routers.subscriptions import router as subscriptions_router
+from api.routers.dev import router as dev_router
 from api.websockets.ws import router as ws_router
-if settings.APP_ENV == "development":
-    from api.routers.dev import router as dev_router
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(sessions_router, prefix="/api/sessions", tags=["sessions"])
@@ -195,8 +194,10 @@ except Exception:
         "Failed to import admin_narrator router — admin panel will be unavailable",
     )
 app.include_router(ws_router, prefix="/ws", tags=["ws"])
-if settings.APP_ENV == "development":
-    app.include_router(dev_router, prefix="/api/dev", tags=["dev"])
+# /api/dev/* — синтетические тест-лобби. Эндпоинты гейтятся
+# require_admin_or_dev_env: в production пускает только админов,
+# в dev/test — любого залогиненного.
+app.include_router(dev_router, prefix="/api/dev", tags=["dev"])
 
 
 @app.get("/")
