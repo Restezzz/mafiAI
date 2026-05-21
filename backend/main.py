@@ -170,6 +170,7 @@ from api.routers.logs import router as logs_router
 from api.routers.observability import router as observability_router
 from api.routers.subscriptions import router as subscriptions_router
 from api.routers.dev import router as dev_router
+from api.routers.admin_users import router as admin_users_router
 from api.websockets.ws import router as ws_router
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
@@ -179,6 +180,8 @@ app.include_router(game_router, prefix="/api/sessions", tags=["game"])
 app.include_router(logs_router, prefix="/api/logs", tags=["logs"])
 app.include_router(observability_router, prefix="/api/observability", tags=["observability"])
 app.include_router(subscriptions_router, prefix="/api/subscriptions", tags=["subscriptions"])
+# /api/admin/users/* — управление is_admin флагами других юзеров. Гейт require_admin.
+app.include_router(admin_users_router, prefix="/api/admin", tags=["admin-users"])
 # admin_narrator-роутер изолируем: его импорт тянет models.narrator + services
 # narrator_*, которые требуют применённых миграций (narrator_tables, is_admin).
 # Если миграции не накатились / схема рассинхронизирована — импорт упадёт и
