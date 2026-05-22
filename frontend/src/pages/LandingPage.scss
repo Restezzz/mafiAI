@@ -1355,9 +1355,9 @@ $ml-r-lg: 24px;
     height: 26px;
     object-fit: contain;
     border-radius: 50%;
-    background: rgba(255, 255, 255, 0.95);
-    padding: 2px;
-    box-shadow: 0 0 12px rgba(255, 51, 51, 0.35);
+    background: transparent;
+    padding: 0;
+    box-shadow: none;
     font-size: 13px;
     margin-left: 4px;
   }
