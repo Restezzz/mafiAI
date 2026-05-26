@@ -151,6 +151,9 @@ _STEPS: list[dict[str, Any]] = [
         "slug": "night_start_decision",
         "kind": "branch",
         "label": "Какая ночь?",
+        # При входе в этот branch создаётся новая GamePhase(night, N+1).
+        # phase_number в step_vars увеличивается на 1.
+        "payload": {"phase_action": "enter_night"},
     },
     {
         "slug": "night_start_first",
@@ -337,6 +340,8 @@ _STEPS: list[dict[str, Any]] = [
         "slug": "day_discussion_intro",
         "kind": "narration",
         "label": "Объявление дискуссии",
+        # Первый дневной шаг — создаём GamePhase(day, N).
+        "payload": {"phase_action": "enter_day"},
         "cues": [("after_night_result",)],
     },
     {
@@ -382,18 +387,22 @@ _STEPS: list[dict[str, Any]] = [
         "slug": "city_won",
         "kind": "narration",
         "label": "Победа мирных",
+        # Сначала фиксируем sessions.status='finished', потом играем фразу.
+        "payload": {"phase_action": "enter_finished"},
         "cues": [("city_win_post",)],
     },
     {
         "slug": "mafia_won",
         "kind": "narration",
         "label": "Победа мафии",
+        "payload": {"phase_action": "enter_finished"},
         "cues": [("mafia_win_post",)],
     },
     {
         "slug": "maniac_won",
         "kind": "narration",
         "label": "Победа маньяка",
+        "payload": {"phase_action": "enter_finished"},
         "cues": [("maniac_win_post",)],
     },
     {

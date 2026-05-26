@@ -48,9 +48,39 @@ async def _recover_one_session(session_id: uuid.UUID) -> None:
             log_event(logger, logging.WARNING, "recovery.skipped", "Recovery skipped for paused session", session_id=str(session_id))
             return
         rt = runtime_state.get(session_id)
-        if rt.phase_transition_running or rt.night_sequence_running:
+        if rt.phase_transition_running or rt.night_sequence_running or rt.story_engine_running:
             log_event(logger, logging.WARNING, "recovery.skipped", "Recovery skipped for busy runtime", session_id=str(session_id))
             return
+
+        # Story Engine recovery: если сессия в режиме use_story_engine — все
+        # ниже идущие legacy ветки (role_reveal/day/night) НЕ применимы,
+        # потому что фазы в Story Engine управляются step.payload.phase_action,
+        # а timers/sequence — handler'ами role_action/discussion/voting.
+        # Просто перезапускаем executor: ``start_story`` идемпотентен,
+        # подберёт state.current_step_id и продолжит с того места.
+        use_story_engine = bool(
+            session.story_id and (session.settings or {}).get("use_story_engine")
+        )
+        if use_story_engine:
+            # Локальный импорт чтобы избежать импорта story_runtime в legacy
+            # окружении без миграций Story Engine.
+            try:
+                from services.story_runtime import start_story
+            except ImportError:
+                log_event(
+                    logger, logging.ERROR, "recovery.story_engine_import_failed",
+                    "use_story_engine=true но services.story_runtime не импортируется",
+                    session_id=str(session_id),
+                )
+                return
+            await start_story(session_id)
+            log_event(
+                logger, logging.INFO, "recovery.story_engine_resumed",
+                "Story Engine executor resumed via recovery_loop",
+                session_id=str(session_id),
+            )
+            return
+
         phase = await get_current_phase(db, session_id)
         if not phase:
             latest_phase = await get_last_known_phase(db, session_id)

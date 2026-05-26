@@ -45,6 +45,11 @@ class SessionRuntime:
     # background task marker (чтобы не запускать несколько recovery/sequence параллельно)
     night_sequence_running: bool = False
 
+    # Story Engine: True пока _run_loop активен. recovery_loop проверяет
+    # этот флаг чтобы не запустить вторую копию executor параллельно.
+    # Сбрасывается в False в finally-блоке _run_loop.
+    story_engine_running: bool = False
+
     # Переход между фазами / резолв фаз выполняется прямо сейчас.
     # Recovery не должен вмешиваться, пока этот флаг поднят.
     phase_transition_running: bool = False

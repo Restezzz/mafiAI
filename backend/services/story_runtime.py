@@ -25,9 +25,21 @@
 ``_evaluate_condition`` — поддерживает 8 атомарных типов и рекурсивные
 all/any/not. См. design doc §3.4.
 
-Этап 2.2 в текущей реализации: handlers narration/branch/end/pause.
-role_action/discussion/voting/night_resolve/day_resolve — stubs с
-``NotImplementedError``, реализуются в подэтапах 2.3-2.4.
+Состояние этапа 2.4: все handlers реализованы. role_action делает
+базовый timer + action_required + wait на night_action_event. discussion/
+voting — timer + WS phase_changed. night_resolve / day_resolve вызывают
+legacy resolve_night / resolve_votes из game_engine и записывают в
+step_vars: winner_team, phase_number, vote_tie, died_role, death_cause,
+alive_roles — эти ключи используются в conditions transitions.
+
+Phase transitions: step.payload.phase_action ∈ {enter_night, enter_day,
+enter_finished} выполняется в ``_apply_phase_action`` ПЕРЕД handler'ом.
+Создаёт новую GamePhase, закрывает старую, шлёт phase_changed.
+Ограничения MVP (исправяются в этапе 7 при удалении legacy):
+- role_action поддерживает только одного actor'а (для мафии — первый
+  по join_order, остальные не видят action_required).
+- Нет lover_block, doctor heal restriction, don't-attack-team.
+- voting — один раунд, без tie-break переголосовки.
 """
 from __future__ import annotations
 
@@ -36,7 +48,7 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -44,7 +56,12 @@ from core.database import async_session_factory
 from core.exceptions import GameError
 from core.logging import log_event
 from core.utils import utc_now
+from models.day_vote import DayVote
+from models.game_event import GameEvent
 from models.game_phase import GamePhase
+from models.night_action import NightAction
+from models.player import Player
+from models.role import Role
 from models.session import Session
 from models.session_story_state import SessionStoryState
 from models.story import (
@@ -55,6 +72,7 @@ from models.story import (
     StoryTransition,
 )
 from services.runtime_state import runtime_state
+from services.timer_service import timer_service
 from services.ws_manager import ws_manager
 
 
@@ -149,6 +167,19 @@ async def start_story(session_id: uuid.UUID) -> None:
             resumed=resumed,
         )
 
+    # Защита от двойного запуска: если executor уже работает (например
+    # recovery_loop вызвал start_story повторно), не запускаем второй task.
+    # Без этого получим race-condition: два _run_loop конкурируют за
+    # current_step_id, шлют дубликаты WS phase_changed, перетирают timers.
+    rt = runtime_state.get(session_id)
+    if rt.story_engine_running:
+        log_event(
+            logger, logging.INFO, "story_engine.start_skipped",
+            "Story Engine executor already running — skipping duplicate start",
+            session_id=str(session_id),
+        )
+        return
+
     # Запускаем executor вне транзакции, чтобы не держать connection
     # на всю длину сюжета. Каждый handler открывает свою сессию.
     asyncio.create_task(_run_loop(session_id))
@@ -164,7 +195,26 @@ async def _run_loop(session_id: uuid.UUID) -> None:
 
     Запускается как ``asyncio.create_task`` чтобы HTTP-handler'ы (start_game,
     acknowledge_role) завершались моментально.
+
+    Устанавливает rt.story_engine_running=True в начале, False в finally —
+    это нужно для защиты от двойного запуска через recovery_loop / повторный
+    start_story (см. ``start_story`` выше).
     """
+    rt = runtime_state.get(session_id)
+    rt.story_engine_running = True
+    try:
+        await _run_loop_inner(session_id)
+    finally:
+        rt.story_engine_running = False
+        log_event(
+            logger, logging.INFO, "story_engine.loop_exited",
+            "Story Engine _run_loop exited",
+            session_id=str(session_id),
+        )
+
+
+async def _run_loop_inner(session_id: uuid.UUID) -> None:
+    """Содержимое _run_loop без флаг-обвязки (вынесено для finally-cleanup)."""
     advance_depth = 0
     while True:
         rt = runtime_state.get(session_id)
@@ -281,6 +331,9 @@ async def _run_step(session_id: uuid.UUID, step: StoryStep) -> None:
     handler = handlers.get(step.kind)
     if handler is None:
         raise GameError(500, "unknown_step_kind", f"Unknown step.kind: {step.kind}")
+    # Pre-step: если step.payload.phase_action задан — создаём новую GamePhase
+    # и шлём phase_changed ДО того как handler начнёт использовать эту фазу.
+    await _apply_phase_action(session_id, step)
     await handler(session_id, step)
 
 
@@ -594,33 +647,680 @@ async def _handle_end(session_id: uuid.UUID, step: StoryStep) -> None:
 
 
 # ============================================================================
-# Handlers — stubs (этапы 2.3-2.4)
+# Handlers — gameplay (этапы 2.3-2.4)
 # ============================================================================
+
+# Маппинг role_slug → action_type для action_required WS.
+# Используется в _handle_role_action когда payload не задаёт action_type явно.
+_ROLE_TO_ACTION_TYPE: dict[str, str] = {
+    "mafia": "kill",
+    "don": "don_check",
+    "sheriff": "check",
+    "doctor": "heal",
+    "lover": "lover_visit",
+    "maniac": "maniac_kill",
+}
 
 
 async def _handle_role_action(session_id: uuid.UUID, step: StoryStep) -> None:
-    """Stub: действие игрока с ролью. Этап 2.3."""
-    raise NotImplementedError("role_action handler — этап 2.3")
+    """Один ночной ход роли.
+
+    step.payload:
+      - role_slug: str (обязательно) — какая роль ходит
+      - action_type: str (опц.) — переопределяет дефолт из _ROLE_TO_ACTION_TYPE
+      - timer_setting: str (опц.) — имя ключа в session.settings для таймера
+        (default 'night_action_timer_seconds')
+      - skip_if_dead: bool (default true) — пропустить ход если актёр мёртв
+      - exclude_self_target: bool (default true)
+
+    Логика:
+      1. Найти живого actor с этой role_slug. Если skip_if_dead и actor мёртв
+         (или его нет вовсе) — пропустить ход, advance дальше.
+      2. Сформировать targets (все живые кроме self).
+      3. Запустить timer, отправить action_required actor'у.
+      4. Ждать night_action_event (или timeout). По событию — завершить.
+
+    MVP-ограничения: один actor (для мафии берётся первый по join_order),
+    нет lover_block, нет doctor heal history.
+    """
+    payload = step.payload or {}
+    role_slug = payload.get("role_slug")
+    if not role_slug:
+        log_event(
+            logger, logging.WARNING, "story_engine.role_action.no_role",
+            "role_action step без role_slug — пропускаем",
+            session_id=str(session_id), step_slug=step.slug,
+        )
+        return
+
+    skip_if_dead = bool(payload.get("skip_if_dead", True))
+    exclude_self = bool(payload.get("exclude_self_target", True))
+    action_type = payload.get("action_type") or _ROLE_TO_ACTION_TYPE.get(role_slug)
+    if action_type is None:
+        log_event(
+            logger, logging.WARNING, "story_engine.role_action.no_action_type",
+            f"role={role_slug!r}: action_type не задан в payload и нет дефолта",
+            session_id=str(session_id), step_slug=step.slug,
+        )
+        return
+
+    timer_setting = payload.get("timer_setting") or "night_action_timer_seconds"
+
+    async with async_session_factory() as db:
+        session = await db.get(Session, session_id)
+        if session is None:
+            return
+        timer_seconds = int((session.settings or {}).get(timer_setting) or 30)
+
+        # Все живые игроки, чтобы определить actor + targets.
+        alive_players = (
+            await db.scalars(
+                select(Player)
+                .options(selectinload(Player.role), selectinload(Player.user))
+                .where(Player.session_id == session_id, Player.status == "alive")
+                .order_by(Player.join_order)
+            )
+        ).all()
+
+        actor: Player | None = next(
+            (p for p in alive_players if p.role and p.role.slug == role_slug),
+            None,
+        )
+
+        if actor is None and skip_if_dead:
+            log_event(
+                logger, logging.INFO, "story_engine.role_action.skipped",
+                "Actor with role is dead/missing — skipping turn",
+                session_id=str(session_id), role_slug=role_slug,
+            )
+            return
+
+        # available_targets: все живые кроме самого actor (если exclude_self).
+        target_players = [
+            p for p in alive_players
+            if not exclude_self or (actor is None or p.id != actor.id)
+        ]
+        targets = [_player_target_dict(p) for p in target_players]
+
+        # Текущая фаза для phase_payload.
+        phase = await _get_current_phase(db, session_id)
+        if phase is None:
+            return
+
+        rt = runtime_state.get(session_id)
+        rt.timer_name = f"night_{role_slug}"
+        rt.timer_seconds = timer_seconds
+        rt.timer_started_at = utc_now()
+        rt.night_turn = role_slug
+        rt.night_action_event.clear()
+
+        # WS phase_changed с timer state — фронт обновит таймер.
+        phase_payload = {
+            "phase": {"type": phase.phase_type, "number": phase.phase_number},
+            "sub_phase": None,
+            "night_turn": role_slug,
+            "timer_name": rt.timer_name,
+            "timer_seconds": timer_seconds,
+            "timer_started_at": rt.timer_started_at.isoformat(),
+        }
+        await _emit_phase_changed(session_id, phase_payload, db=db, phase_id=phase.id)
+
+        # action_required только если есть живой actor.
+        if actor is not None:
+            await ws_manager.send_to_user(
+                session_id,
+                actor.user_id,
+                {
+                    "type": "action_required",
+                    "payload": {
+                        "action_type": action_type,
+                        "available_targets": targets,
+                        "timer_seconds": timer_seconds,
+                        "timer_started_at": rt.timer_started_at.isoformat(),
+                    },
+                },
+            )
+
+    # Timer callback: по таймауту шлём action_timeout и снимаем event.
+    async def _on_timeout() -> None:
+        await ws_manager.send_to_session(
+            session_id,
+            {"type": "action_timeout", "payload": {"action_type": action_type}},
+        )
+        rt = runtime_state.get(session_id)
+        rt.night_action_event.set()
+
+    await timer_service.start_timer(session_id, rt.timer_name, timer_seconds, _on_timeout)
+    await rt.night_action_event.wait()
+    await timer_service.cancel_timer(session_id, rt.timer_name)
+    rt.night_action_event.clear()
+
+    rt.timer_name = None
+    rt.timer_seconds = None
+    rt.timer_started_at = None
+    rt.night_turn = None
 
 
 async def _handle_discussion(session_id: uuid.UUID, step: StoryStep) -> None:
-    """Stub: дневная дискуссия. Этап 2.3."""
-    raise NotImplementedError("discussion handler — этап 2.3")
+    """Дневная дискуссия — просто таймер на discussion_timer_seconds.
+
+    step.payload.timer_setting (default 'discussion_timer_seconds').
+    Фронт получает phase_changed с sub_phase='discussion' + timer info.
+    По окончании timer — handler возвращается, executor advance'ит.
+    """
+    payload = step.payload or {}
+    timer_setting = payload.get("timer_setting") or "discussion_timer_seconds"
+
+    async with async_session_factory() as db:
+        session = await db.get(Session, session_id)
+        if session is None:
+            return
+        timer_seconds = int((session.settings or {}).get(timer_setting) or 60)
+        phase = await _get_current_phase(db, session_id)
+        if phase is None:
+            return
+
+        rt = runtime_state.get(session_id)
+        rt.timer_name = "discussion"
+        rt.timer_seconds = timer_seconds
+        rt.timer_started_at = utc_now()
+
+        phase_payload = {
+            "phase": {"type": phase.phase_type, "number": phase.phase_number},
+            "sub_phase": "discussion",
+            "timer_name": "discussion",
+            "timer_seconds": timer_seconds,
+            "timer_started_at": rt.timer_started_at.isoformat(),
+        }
+        await _emit_phase_changed(session_id, phase_payload, db=db, phase_id=phase.id)
+
+    # Ждём окончания таймера через _wait_or_pause (учитывает паузу).
+    from services.game_engine import _wait_or_pause
+    await _wait_or_pause(session_id, timer_seconds)
+
+    rt.timer_name = None
+    rt.timer_seconds = None
+    rt.timer_started_at = None
 
 
 async def _handle_voting(session_id: uuid.UUID, step: StoryStep) -> None:
-    """Stub: голосование. Этап 2.3."""
-    raise NotImplementedError("voting handler — этап 2.3")
+    """Голосование. Один раунд (MVP).
+
+    step.payload.timer_setting (default 'voting_timer_seconds').
+    Голоса собираются через POST /api/sessions/{id}/vote (legacy endpoint
+    пишет в DayVote). По окончании timer — handler возвращается, day_resolve
+    подсчитает.
+    """
+    payload = step.payload or {}
+    timer_setting = payload.get("timer_setting") or "voting_timer_seconds"
+
+    async with async_session_factory() as db:
+        session = await db.get(Session, session_id)
+        if session is None:
+            return
+        timer_seconds = int((session.settings or {}).get(timer_setting) or 30)
+        phase = await _get_current_phase(db, session_id)
+        if phase is None:
+            return
+
+        rt = runtime_state.get(session_id)
+        rt.timer_name = "voting"
+        rt.timer_seconds = timer_seconds
+        rt.timer_started_at = utc_now()
+
+        phase_payload = {
+            "phase": {"type": phase.phase_type, "number": phase.phase_number},
+            "sub_phase": "voting",
+            "timer_name": "voting",
+            "timer_seconds": timer_seconds,
+            "timer_started_at": rt.timer_started_at.isoformat(),
+        }
+        await _emit_phase_changed(session_id, phase_payload, db=db, phase_id=phase.id)
+
+    from services.game_engine import _wait_or_pause
+    await _wait_or_pause(session_id, timer_seconds)
+
+    rt.timer_name = None
+    rt.timer_seconds = None
+    rt.timer_started_at = None
 
 
 async def _handle_night_resolve(session_id: uuid.UUID, step: StoryStep) -> None:
-    """Stub: подсчёт жертв ночи. Этап 2.4."""
-    raise NotImplementedError("night_resolve handler — этап 2.4")
+    """Подсчёт ночных жертв БЕЗ narration (narration делается отдельным
+    narration-шагом ``night_result``).
+
+    Логика (упрощённая копия ``game_engine.resolve_night`` без WS/narration):
+    - Собираем NightAction по фазе: kill, maniac_kill, heal, lover_visit.
+    - Целевые жертвы = (kill ∪ maniac_kill) \\ healed.
+    - Если lover увёл цель — атаки на неё блокируются (was_blocked=True).
+    - Применяем status='dead' к жертвам, шлём WS player_eliminated.
+    - Обновляем step_vars: died_role (если одна жертва), death_cause='night',
+      phase_number, alive_roles, winner_team.
+    """
+    from services.game_engine import check_win_condition
+
+    async with async_session_factory() as db:
+        session = await db.get(Session, session_id)
+        if session is None:
+            return
+        phase = await _get_current_phase(db, session_id)
+        if phase is None or phase.phase_type != "night":
+            return
+
+        mafia_action = await db.scalar(
+            select(NightAction).where(
+                NightAction.phase_id == phase.id,
+                NightAction.action_type == "kill",
+            )
+        )
+        maniac_action = await db.scalar(
+            select(NightAction).where(
+                NightAction.phase_id == phase.id,
+                NightAction.action_type == "maniac_kill",
+            )
+        )
+        doctor_action = await db.scalar(
+            select(NightAction).where(
+                NightAction.phase_id == phase.id,
+                NightAction.action_type == "heal",
+            )
+        )
+        lover_action = await db.scalar(
+            select(NightAction).where(
+                NightAction.phase_id == phase.id,
+                NightAction.action_type == "lover_visit",
+            )
+        )
+
+        attack_targets: set[uuid.UUID] = set()
+        if mafia_action and not mafia_action.was_blocked:
+            attack_targets.add(mafia_action.target_player_id)
+        if maniac_action and not maniac_action.was_blocked:
+            attack_targets.add(maniac_action.target_player_id)
+
+        healed_id = doctor_action.target_player_id if doctor_action else None
+        lover_target_id = lover_action.target_player_id if lover_action else None
+
+        if lover_target_id is not None and lover_target_id in attack_targets:
+            attack_targets.discard(lover_target_id)
+
+        if healed_id is not None and healed_id in attack_targets:
+            attack_targets.discard(healed_id)
+
+        died_role: str | None = None
+        died_count = 0
+        for tid in attack_targets:
+            target = await db.scalar(
+                select(Player).options(selectinload(Player.role)).where(Player.id == tid)
+            )
+            if target and target.status == "alive":
+                target.status = "dead"
+                died_count += 1
+                if died_count == 1 and target.role:
+                    died_role = target.role.slug
+                elif died_count > 1:
+                    died_role = None  # mass death — не привязываем к конкретной роли
+                db.add(
+                    GameEvent(
+                        id=uuid.uuid4(),
+                        session_id=session_id,
+                        phase_id=phase.id,
+                        event_type="player_eliminated",
+                        payload={
+                            "player_id": str(target.id),
+                            "name": target.name,
+                            "cause": "night",
+                            "role_slug": target.role.slug if target.role else None,
+                        },
+                    )
+                )
+                await ws_manager.send_to_session(
+                    session_id,
+                    {
+                        "type": "player_eliminated",
+                        "payload": {
+                            "player_id": str(target.id),
+                            "name": target.name,
+                            "cause": "night",
+                        },
+                    },
+                )
+
+        # Закрываем ночную фазу.
+        if phase.ended_at is None:
+            phase.ended_at = utc_now()
+        await db.commit()
+
+        await _refresh_step_vars(
+            db,
+            session_id,
+            phase_number=phase.phase_number,
+            death_cause="night",
+            died_role=died_role,
+        )
+        winner = await check_win_condition(db, session_id)
+        if winner is not None:
+            await _set_step_var(db, session_id, "winner_team", winner)
 
 
 async def _handle_day_resolve(session_id: uuid.UUID, step: StoryStep) -> None:
-    """Stub: резолв голосования. Этап 2.4."""
-    raise NotImplementedError("day_resolve handler — этап 2.4")
+    """Резолв голосования. MVP: подсчёт голосов из DayVote, изгнание игрока
+    с большинством, обновление step_vars.
+
+    После day_resolve записывает в step_vars:
+      - phase_number
+      - died_role: str | null
+      - death_cause: 'vote'
+      - vote_tie: bool
+      - winner_team: str | null
+      - alive_roles
+    """
+    from services.game_engine import check_win_condition
+
+    async with async_session_factory() as db:
+        session = await db.get(Session, session_id)
+        if session is None:
+            return
+        phase = await _get_current_phase(db, session_id)
+        if phase is None or phase.phase_type != "day":
+            return
+
+        # Подсчёт голосов: target_player_id → count, исключая abstain.
+        votes = (
+            await db.scalars(
+                select(DayVote).where(
+                    DayVote.phase_id == phase.id,
+                    DayVote.target_player_id.is_not(None),
+                )
+            )
+        ).all()
+        tally: dict[uuid.UUID, int] = {}
+        for v in votes:
+            tally[v.target_player_id] = tally.get(v.target_player_id, 0) + 1
+
+        died_role: str | None = None
+        vote_tie = False
+        if tally:
+            max_count = max(tally.values())
+            leaders = [tid for tid, c in tally.items() if c == max_count]
+            if len(leaders) == 1:
+                # Изгнан игрок с большинством.
+                eliminated = await db.scalar(
+                    select(Player)
+                    .options(selectinload(Player.role))
+                    .where(Player.id == leaders[0])
+                )
+                if eliminated and eliminated.status == "alive":
+                    eliminated.status = "dead"
+                    died_role = eliminated.role.slug if eliminated.role else None
+                    db.add(
+                        GameEvent(
+                            id=uuid.uuid4(),
+                            session_id=session_id,
+                            phase_id=phase.id,
+                            event_type="player_eliminated",
+                            payload={
+                                "player_id": str(eliminated.id),
+                                "name": eliminated.name,
+                                "cause": "vote",
+                                "role_slug": died_role,
+                            },
+                        )
+                    )
+                    await ws_manager.send_to_session(
+                        session_id,
+                        {
+                            "type": "player_eliminated",
+                            "payload": {
+                                "player_id": str(eliminated.id),
+                                "name": eliminated.name,
+                                "cause": "vote",
+                            },
+                        },
+                    )
+            else:
+                vote_tie = True
+
+        # Закрываем фазу day.
+        if phase.ended_at is None:
+            phase.ended_at = utc_now()
+        await db.commit()
+
+        await _refresh_step_vars(
+            db,
+            session_id,
+            phase_number=phase.phase_number,
+            death_cause="vote",
+            died_role=died_role,
+            vote_tie=vote_tie,
+        )
+        winner = await check_win_condition(db, session_id)
+        if winner is not None:
+            await _set_step_var(db, session_id, "winner_team", winner)
+
+
+# ============================================================================
+# Helpers: phase actions, step_vars, current phase
+# ============================================================================
+
+
+async def _apply_phase_action(session_id: uuid.UUID, step: StoryStep) -> None:
+    """Применяет step.payload.phase_action: создаёт новую GamePhase.
+
+    Допустимые значения:
+      - 'enter_night': новая phase night, phase_number = step_vars.phase_number + 1
+        (или 1 если ещё нет). Записывает phase_number в step_vars.
+      - 'enter_day':   новая phase day, phase_number = current night.phase_number.
+      - 'enter_finished': sessions.status = 'finished'. (Финальный exit step
+        тоже шлёт game_finished, но enter_finished нужен ДО ending narration.)
+
+    Если phase_action не задан — no-op. Дублирующая фаза (та же type+number
+    уже есть) — игнорируется (idempotent на случай recovery).
+    """
+    payload = step.payload or {}
+    action = payload.get("phase_action")
+    if not action:
+        return
+
+    async with async_session_factory() as db:
+        session = await db.get(Session, session_id)
+        if session is None:
+            return
+
+        if action == "enter_finished":
+            session.status = "finished"
+            session.ended_at = utc_now()
+            current = await _get_current_phase(db, session_id)
+            if current and current.ended_at is None:
+                current.ended_at = session.ended_at
+            await db.commit()
+            return
+
+        # Определяем next phase_type + phase_number.
+        state = await _load_state(db, session_id)
+        current_phase_number: int = 0
+        if state and state.step_vars:
+            current_phase_number = int(state.step_vars.get("phase_number") or 0)
+
+        if action == "enter_night":
+            next_type = "night"
+            next_number = current_phase_number + 1
+        elif action == "enter_day":
+            next_type = "day"
+            next_number = current_phase_number  # тот же номер что и ночь
+        else:
+            log_event(
+                logger, logging.WARNING, "story_engine.unknown_phase_action",
+                f"Unknown phase_action: {action!r}",
+                session_id=str(session_id), step_slug=step.slug,
+            )
+            return
+
+        # Проверка идемпотентности: дублирующая фаза уже существует?
+        dup = await db.scalar(
+            select(GamePhase.id).where(
+                GamePhase.session_id == session_id,
+                GamePhase.phase_type == next_type,
+                GamePhase.phase_number == next_number,
+            )
+        )
+        if dup is not None:
+            log_event(
+                logger, logging.INFO, "story_engine.phase_dup_skipped",
+                "Phase already exists, skipping creation",
+                session_id=str(session_id),
+                phase_type=next_type, phase_number=next_number,
+            )
+            # Всё равно обновим step_vars, чтобы условия видели актуальный номер.
+            if state:
+                vars = dict(state.step_vars or {})
+                vars["phase_number"] = next_number
+                state.step_vars = vars
+                await db.commit()
+            return
+
+        # Закрыть текущую фазу.
+        current = await _get_current_phase(db, session_id)
+        if current and current.ended_at is None:
+            current.ended_at = utc_now()
+
+        new_phase = GamePhase(
+            id=uuid.uuid4(),
+            session_id=session_id,
+            phase_type=next_type,
+            phase_number=next_number,
+            started_at=utc_now(),
+            ended_at=None,
+        )
+        db.add(new_phase)
+
+        # Обновим step_vars.phase_number.
+        if state:
+            vars = dict(state.step_vars or {})
+            vars["phase_number"] = next_number
+            state.step_vars = vars
+
+        await db.commit()
+
+        # WS phase_changed.
+        phase_payload = {
+            "phase": {"type": next_type, "number": next_number},
+            "sub_phase": None,
+            "timer_seconds": None,
+            "timer_started_at": None,
+        }
+        await _emit_phase_changed(
+            session_id, phase_payload, db=db, phase_id=new_phase.id
+        )
+        log_event(
+            logger, logging.INFO, "story_engine.phase_entered",
+            "Story Engine created new GamePhase",
+            session_id=str(session_id),
+            phase_type=next_type, phase_number=next_number,
+            via=action,
+        )
+
+
+async def _refresh_step_vars(
+    db: AsyncSession,
+    session_id: uuid.UUID,
+    *,
+    phase_number: int,
+    death_cause: str,
+    died_role: str | None = None,
+    vote_tie: bool = False,
+) -> None:
+    """Обновляет step_vars после night_resolve / day_resolve.
+
+    Считает alive_roles из БД (slug-и живых ролей) для условий role_alive/dead.
+    """
+    state = await _load_state(db, session_id)
+    if state is None:
+        return
+    alive_role_slugs = (
+        await db.scalars(
+            select(Role.slug)
+            .join(Player, Player.role_id == Role.id)
+            .where(Player.session_id == session_id, Player.status == "alive")
+            .distinct()
+        )
+    ).all()
+    vars = dict(state.step_vars or {})
+    vars["phase_number"] = phase_number
+    vars["death_cause"] = death_cause
+    vars["died_role"] = died_role
+    vars["vote_tie"] = vote_tie
+    vars["alive_roles"] = sorted(set(alive_role_slugs))
+    state.step_vars = vars
+    await db.commit()
+
+
+async def _set_step_var(
+    db: AsyncSession, session_id: uuid.UUID, key: str, value: Any
+) -> None:
+    state = await _load_state(db, session_id)
+    if state is None:
+        return
+    vars = dict(state.step_vars or {})
+    vars[key] = value
+    state.step_vars = vars
+    await db.commit()
+
+
+async def _get_current_phase(
+    db: AsyncSession, session_id: uuid.UUID
+) -> GamePhase | None:
+    """Локальная копия get_current_phase из game_engine — без import-cycle."""
+    return await db.scalar(
+        select(GamePhase)
+        .where(GamePhase.session_id == session_id, GamePhase.ended_at.is_(None))
+        .order_by(GamePhase.started_at.desc())
+        .limit(1)
+    )
+
+
+def _player_target_dict(p: Player) -> dict[str, str]:
+    """Сериализация Player для available_targets WS-payload.
+
+    Дублирует helper из game_engine чтобы избежать import-cycle.
+    """
+    return {"player_id": str(p.id), "name": p.name}
+
+
+async def _emit_phase_changed(
+    session_id: uuid.UUID,
+    payload: dict,
+    *,
+    db: AsyncSession | None = None,
+    phase_id: uuid.UUID | None = None,
+) -> None:
+    """Тонкая обёртка над WS phase_changed + опциональный persist GameEvent.
+
+    Для Story Engine не нужен heavy _emit_phase_changed из game_engine
+    (он управляет current_announcement; у нас announcement в narration handler).
+    """
+    log_event(
+        logger, logging.INFO, "story_engine.phase_changed",
+        "Story Engine emit phase_changed",
+        session_id=str(session_id),
+        phase=payload.get("phase"),
+        sub_phase=payload.get("sub_phase"),
+        night_turn=payload.get("night_turn"),
+    )
+    await ws_manager.send_to_session(
+        session_id, {"type": "phase_changed", "payload": payload}
+    )
+    if db is not None and phase_id is not None:
+        db.add(
+            GameEvent(
+                id=uuid.uuid4(),
+                session_id=session_id,
+                phase_id=phase_id,
+                event_type="phase_changed",
+                payload=payload,
+            )
+        )
+        await db.commit()
 
 
 # ============================================================================
