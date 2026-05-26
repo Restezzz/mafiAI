@@ -131,48 +131,53 @@ load(current_step) → execute(step) → pick_next_step(transitions, conditions)
 ### 3.2 ER-диаграмма
 
 ```
-┌──────────────────┐       ┌──────────────────────┐
-│     stories      │ 1 ── ∞│     story_steps      │
-│ id, slug, name,  │       │ id, story_id, slug,  │
-│ version,         │       │ kind, label,         │
-│ is_active,       │       │ payload (jsonb),     │
-│ entry_step_id,   │       │ position_x, _y       │
-│ settings (jsonb) │       └─────┬────────────┬───┘
-└────────┬─────────┘             │1           │1
-         │1                      │            │
-         │                       │∞           │∞
-         │              ┌────────▼─────────┐  │
-         │              │ story_narration_ │  │
-         │              │       cues       │  │
-         │              │ id, step_id,     │  │
-         │              │ sort_order,      │  │
-         │              │ trigger_id (FK   │  │
-         │              │  narrator_       │  │
-         │              │  triggers),      │  │
-         │              │ pause_before_ms, │  │
-         │              │ pause_after_ms,  │  │
-         │              │ override_text    │  │
-         │              └──────────────────┘  │
-         │                                    │
-         │                          ┌─────────▼──────────────┐
+┌────────────────────────┐       ┌──────────────────────┐
+│        stories         │ 1 ── ∞│     story_steps      │
+│ id, slug,              │       │ id, story_id, slug,  │
+│ version,               │       │ kind, label,         │
+│ name, description,     │       │ payload (jsonb),     │
+│ is_active,             │       │ position_x, _y       │
+│ is_obsolete,           │       └─────┬────────────┬───┘
+│ superseded_by_id (FK), │             │1           │1
+│ entry_step_id (FK)     │             │            │
+│                        │             │∞           │∞
+│ UNIQUE (slug, version) │    ┌────────▼─────────┐  │
+└────────┬───────────────┘    │ story_narration_ │  │
+         │1                   │       cues       │  │
+         │                    │ id, step_id,     │  │
+         │                    │ sort_order,      │  │
+         │                    │ trigger_id (FK   │  │
+         │                    │  narrator_       │  │
+         │                    │  triggers),      │  │
+         │                    │ pause_before_ms, │  │
+         │                    │ pause_after_ms,  │  │
+         │                    │ override_text,   │  │
+         │                    │ override_durat-  │  │
+         │                    │   ion_ms (null   │  │
+         │                    │   = use audio)   │  │
+         │                    └──────────────────┘  │
+         │                                          │
+         │                          ┌───────────────▼────────┐
          │                          │  story_transitions     │
-         │                          │ id, from_step_id,      │
+         │                          │ id, story_id,          │
+         │                          │ from_step_id,          │
          │                          │ to_step_id,            │
          │                          │ condition (jsonb),     │
          │                          │ priority               │
          │                          └────────────────────────┘
-         │
          │1
-         │1                           ┌────────────────────────────┐
-         └──────────────────────────► │   story_settings           │
-                                      │ story_id (PK),             │
-                                      │ inter_cue_pause_seconds    │
-                                      │   (numeric 4.2 default 0), │
-                                      │ timer_multiplier_default   │
-                                      │   (numeric 3.2 def 1.0),   │
-                                      │ word_karaoke_enabled bool  │
-                                      └────────────────────────────┘
+         │                          ┌────────────────────────────┐
+         └────────────────────────► │   story_settings           │
+                                    │ story_id (PK),             │
+                                    │ inter_cue_pause_seconds    │
+                                    │   (numeric 4.2 default 0), │
+                                    │ timer_multiplier_default   │
+                                    │   (numeric 3.2 def 1.0),   │
+                                    │ karaoke_enabled bool       │
+                                    └────────────────────────────┘
 ```
+
+**Версионирование (см. §11.2):** один "логический" сюжет = серия записей `stories` с одним `slug` и разными `version`. UNIQUE `(slug, version)`. При update active-сюжета — создаётся новая запись с `version+1`, старая помечается `is_active=false`, `superseded_by_id` указывает на новую. Старая запись удаляется автоматически, когда нет ни одной `sessions` с `story_id = old`.
 
 ### 3.3 Виды Step (`kind`)
 
@@ -192,6 +197,8 @@ load(current_step) → execute(step) → pick_next_step(transitions, conditions)
 
 `null` — безусловный (default).
 
+**Атомарные предикаты** (минимальные единицы):
+
 | `type` | Параметры | Семантика |
 |---|---|---|
 | `role_alive` | `role_slug` | хотя бы один живой игрок этой роли |
@@ -199,9 +206,41 @@ load(current_step) → execute(step) → pick_next_step(transitions, conditions)
 | `died_role` | `role_slug` | конкретно эта роль умерла на последнем step (night_resolve / day_resolve) |
 | `death_cause` | `value: "vote" \| "night"` | последняя смерть причина |
 | `winner` | `team: "city" \| "mafia" \| "maniac" \| null` | результат win-check'а |
-| `phase_number` | `op: "==" \| ">=" \| "<=", value: int` | какая по счёту ночь/день |
+| `phase_number` | `op: "==" \| ">=" \| "<=" \| "!=", value: int` | какая по счёту ночь/день |
 | `vote_tie` | — | в голосовании ничья (используется в day_resolve) |
-| `step_var` | `key`, `op`, `value` | произвольная переменная в context (для будущего расширения) |
+| `step_var` | `key`, `op` (==/!=/>=/<=/>/<), `value` | произвольная переменная в context |
+
+**Композитные предикаты** (логические комбинаторы, рекурсивные):
+
+| `type` | Параметры | Семантика |
+|---|---|---|
+| `all` | `conditions: list` | TRUE если все вложенные TRUE (AND) |
+| `any` | `conditions: list` | TRUE если хотя бы один вложенный TRUE (OR) |
+| `not` | `condition: object` | TRUE если вложенный FALSE |
+
+Пример: «шериф мёртв И сейчас не первая фаза»:
+```jsonc
+{
+  "type": "all",
+  "conditions": [
+    {"type": "died_role", "role_slug": "sheriff"},
+    {"type": "phase_number", "op": ">=", "value": 2}
+  ]
+}
+```
+
+Пример: «мафия победила ИЛИ маньяк победил» (обработать один и тот же финал):
+```jsonc
+{
+  "type": "any",
+  "conditions": [
+    {"type": "winner", "team": "mafia"},
+    {"type": "winner", "team": "maniac"}
+  ]
+}
+```
+
+Глубина вложенности любая. Для производительности на runtime — каждое условие eval-ится short-circuit (`all` останавливается на первом FALSE, `any` — на первом TRUE).
 
 `priority` — если несколько transitions подходят, выбирается с **наибольшим** priority. Безусловный edge ставится с priority=0 (catch-all).
 
@@ -375,10 +414,18 @@ class SessionRuntime:
 
 ## 7. Karaoke (per-word подсветка)
 
-### 7.1 Модель данных
+### 7.1 Подход
 
-Новая колонка `narrator_variants.word_timings jsonb` (nullable):
+Админ при добавлении mp3 в cue (или в narrator_variant) пишет текстовку фразы. На runtime подсветка подсвечивает слова **равномерно по длине аудио**: для каждого слова рассчитывается `start_ms = i * dur_ms / N` (N — число слов в тексте). Никаких ручных таймингов, никакого whisper — это «работает из коробки» сразу, без отдельной инфры.
+
+Этого достаточно для MVP. **Future work (за пределами текущего roadmap):** автоматическая whisper-разметка с возможностью ручной правки кривых таймингов через UI. Закладываем под это поле `word_timings jsonb` сразу (см. §7.2), но в этапе 5 заполняем только fallback'ом и читаем equally-spaced если поле пустое.
+
+### 7.2 Модель данных
+
+Новая колонка `narrator_variants.word_timings jsonb` (nullable, default null):
 ```jsonc
+// null  → frontend применяет equally-spaced (по text + duration_ms)
+// массив → используется как авторитативная разметка
 [
   {"word": "Мафия,", "start_ms": 0, "end_ms": 480},
   {"word": "откройте", "start_ms": 480, "end_ms": 1100},
@@ -386,22 +433,7 @@ class SessionRuntime:
 ]
 ```
 
-Аналогично для composite-segment'ов:
-```
-narrator_composite_segments.word_timings jsonb (только для kind='audio' с текстовой составляющей)
-```
-
-### 7.2 Источник timestamps
-
-Три варианта, выбирается per-variant:
-
-| Способ | Точность | Стоимость |
-|---|---|---|
-| **Whisper offline** | высокая | требует ставить `whisper`/`whisperX` на сервер; CPU-heavy, ~real-time |
-| **Ручная разметка** | максимальная | админ кликает по аудио-волне, расставляет маркеры (новый UI-инструмент) |
-| **Equally-spaced fallback** | низкая | `dur_ms / words.count`; работает «из коробки» без инфры |
-
-**Рекомендация для MVP:** equally-spaced fallback автоматически при загрузке mp3 + опциональная ручная разметка через UI. Whisper — отдельным MR позже.
+Аналогично можно расширить `narrator_composite_segments.word_timings` для composite. **В этапе 5 — только variants, composite позже.**
 
 ### 7.3 WS payload расширение
 
@@ -413,7 +445,7 @@ narrator_composite_segments.word_timings jsonb (только для kind='audio'
     "text": "Мафия, откройте глаза!",
     "duration_ms": 1750,
     "audio_url": "/audio/...",
-    "word_timings": [...]   // <-- НОВОЕ; null = fallback на typewriter
+    "word_timings": null  // или массив, если есть разметка
   }
 }
 ```
@@ -422,16 +454,15 @@ narrator_composite_segments.word_timings jsonb (только для kind='audio'
 
 ```tsx
 // NarratorScreen.tsx
-{words.map((w, i) => (
+const timings = payload.word_timings ?? computeEquallySpaced(payload.text, payload.duration_ms);
+{timings.map((w, i) => (
   <span className={i === activeIdx ? 'word word--active' : 'word'}>
     {w.word}{' '}
   </span>
 ))}
 ```
 
-`activeIdx` обновляется по `audio.currentTime` (`requestAnimationFrame` loop).
-
-Если `word_timings === null` — текущий typewriter (без regression).
+`activeIdx` обновляется по `audio.currentTime` через `requestAnimationFrame`. `computeEquallySpaced` — pure frontend-функция, не требует backend-расчёта.
 
 ---
 
@@ -572,17 +603,35 @@ else:
 
 ## 11. Этапы
 
+### 11.1 Roadmap
+
 | Этап | Deliverable | Безопасность |
 |---|---|---|
-| **1** | Модели + миграция + seed legacy + admin CRUD API | Read-only, gameplay не трогается |
-| **2** | StoryRuntime executor под `use_story_engine` flag | Прод default = legacy |
+| **1** | Модели Story* + миграция + seed legacy + admin CRUD API + import/export JSON | Read-only, gameplay не трогается |
+| **2** | StoryRuntime executor + переделанная GamePhase model + сериализация current_step_id в session | Прод default = legacy через `use_story_engine` flag |
 | **3** | Pre-game settings (multiplier, inter_cue_pause) в backend + UI form | Влияет только если flag=true |
-| **4** | Admin UI редактор (canvas, drag-n-drop) | Read-only safe |
-| **5** | Karaoke word-timings + frontend подсветка | Fallback на typewriter |
-| **6** | Death-branching (UI редактор edge-conditions) | Read-only safe |
-| **7** | `use_story_engine = true` дефолт + удаление legacy кода | Прод миграция |
+| **4** | Admin UI редактор графа на `@xyflow/react` (drag-n-drop nodes, sidebar editor) | Read-only safe |
+| **5** | Karaoke: text + equally-spaced подсветка в NarratorScreen, поле `word_timings` (заготовка) | Fallback на typewriter |
+| **6** | Death-branching UI + composite conditions (all/any/not) + admin CRUD ролей (для расширения колоды) | Read-only safe |
+| **7** | `use_story_engine = true` дефолт + удаление legacy кода (`narration_script.py`, ветки в `game_engine.py`) | Прод миграция |
 
-После каждого этапа — отдельный commit (без push).
+После каждого этапа — отдельный commit без push. Финальный merge — после прохождения этапов 1–7.
+
+### 11.2 Версионирование сюжетов
+
+**Стратегия:** каждое обновление активного сюжета создаёт новую запись `Story` с `version+1`.
+
+Жизненный цикл:
+1. Admin создаёт `classic_mafia v1`, `is_active=true`. 
+2. Lobby стартует сессию: `session.settings.story_id = v1.id`. 
+3. Admin редактирует сюжет через UI: backend клонирует `v1` → создаёт `v2` со всеми steps/transitions/cues/settings, `v1.is_active=false`, `v1.superseded_by_id=v2.id`, `v2.is_active=true`. 
+4. Pre-game-лобби нового lobby видит только `v2` (фильтр `is_active=true AND is_obsolete=false`). Сессия с `story_id=v1` продолжает играть на `v1` — её граф не меняется. 
+5. Когда `session(story_id=v1)` финиширует — фоновый cleanup (`recovery_loop` или отдельный таймер) проверяет: есть ли ещё `sessions WHERE story_id=v1 AND status IN ('lobby','active')`? Если нет — `DELETE FROM stories WHERE id=v1`. Каскадно удаляются steps/transitions/cues/settings.
+
+Поле `is_obsolete=true` (вместо удаления) используется только если у админа есть какая-то причина оставить старую версию в БД для аудита, но это не дефолт. Дефолт — hard-delete.
+
+**UNIQUE** на уровне Postgres: `UNIQUE (slug, version)`. 
+**Полу-индекс** для быстрого поиска активной версии: `CREATE UNIQUE INDEX ix_stories_active_slug ON stories(slug) WHERE is_active = TRUE`. Гарантирует ровно один is_active=true на slug.
 
 ---
 
@@ -590,17 +639,17 @@ else:
 
 > Эти вопросы я задам после того как ты прочитаешь и оставишь свои комментарии. Можешь ответить на них прямо в этом документе или после.
 
-1. **Несколько сюжетов или один?** Сейчас игра на один сюжет «Мафия». Будут ли в обозримом будущем альтернативные сюжеты («Мафия с любовницей», другая ролевая колода)? Если да — модель `Story` остаётся как есть. Если нет — можно упростить до одного синглтон-сюжета.
+1. **Несколько сюжетов или один?** Ответ: Будет несколько сюжетов.
 
-2. **Роли в граф?** Сейчас роли (`mafia`, `sheriff`, ...) живут в отдельной таблице `roles`. Сюжет может предполагать **дополнительные роли** (например «прокурор»). Тогда сначала нужен админ-CRUD ролей. Это **отдельный** проект — выносим за скобки или включаем в этап 6?
+2. **Роли в граф?** Сейчас роли (`mafia`, `sheriff`, ...) живут в отдельной таблице `roles`. Сюжет может предполагать **дополнительные роли** (например «прокурор»). Тогда сначала нужен админ-CRUD ролей. Это **отдельный** проект — выносим за скобки или включаем в этап 6? Ответ: да, включаем в этап 6.
 
-3. **Импорт/экспорт сюжета:** нужен ли сразу в первой версии (этап 1)? Удобно для бекапов и переноса между окружениями.
+3. **Импорт/экспорт сюжета:** нужен ли сразу в первой версии (этап 1)? Удобно для бекапов и переноса между окружениями. Ответ: давай
 
-4. **Karaoke source:** соглашаешься на equally-spaced fallback для MVP? Или хочется сразу whisper-разметку? (Whisper = отдельная инфра-задача: установка `whisperX`, GPU/CPU воркер, очередь)
+4. **Karaoke source:** соглашаешься на equally-spaced fallback для MVP? Или хочется сразу whisper-разметку? (Whisper = отдельная инфра-задача: установка `whisperX`, GPU/CPU воркер, очередь). Ответ: не уверен насчёт ручной расстановки. меня привлекает вариант, что по дефолту будет просто растягиваться караоке подсветка в зависимости от длинны аудио, а как доп. функция - возможность через виспер единожды обработать каждое mp3 расписав тайминги и потом уже вручную их подредачить, если будет кривой перевод (или тайминг). но это пока что лишнее, сделай просто возможность при добавлении мп3 в сюжет приписать текст, который как раз будет загораться равномерно от длины аудио.
 
-5. **Переменные сюжета (`step_var`):** простой `branch` пока работает только на «died_role / winner / phase_number». Хочется ли уже сейчас более выразительный язык условий (например AND/OR-композиции)? Или достаточно «один condition на edge»?
+5. **Переменные сюжета (`step_var`):** простой `branch` пока работает только на «died_role / winner / phase_number». Хочется ли уже сейчас более выразительный язык условий (например AND/OR-композиции)? Или достаточно «один condition на edge»? Ответ: давай с более выразительным языком условий.
 
-6. **Visual editor library:** предлагаю `@xyflow/react` (бывший reactflow) — лидер в области node-based UI, поддерживается. Альтернатива — самопал на DOM. Согласен на reactflow?
+6. **Visual editor library:** предлагаю `@xyflow/react` (бывший reactflow) — лидер в области node-based UI, поддерживается. Альтернатива — самопал на DOM. Согласен на reactflow? Ответ: не знаю, я не разбираюсь - решай сам.
 
 7. **Версионирование сюжетов:** при правке active-сюжета во время игры на проде — что делать? Варианты:
    - Запретить редактирование active-сюжетов (нужно сделать `is_active=false`, отредактировать, опять `is_active=true`)
@@ -608,19 +657,57 @@ else:
    - Snapshot: при старте сессии копируется snapshot графа в `session.story_snapshot jsonb`, сессия играет по snapshot'у
    - Сейчас (MVP): просто запретить править active-сюжет
 
-   Какой подход предпочитаешь?
+   Какой подход предпочитаешь? Ответ: версионировать, когда все активные сессии доигрываются на старой версии - она автоматически удаляется.
 
-8. **Phase model в БД:** сейчас `GamePhase.phase_type` ∈ `{role_reveal, night, day}`. С story-engine это становится менее точным (внутри одного `night` может быть много шагов с разной семантикой). Оставляем `GamePhase` как есть (для UI-индикатора «ночь/день») и добавляем `current_step_id` рядом? Или переделываем `GamePhase` целиком?
-
+8. **Phase model в БД:** сейчас `GamePhase.phase_type` ∈ `{role_reveal, night, day}`. С story-engine это становится менее точным (внутри одного `night` может быть много шагов с разной семантикой). Оставляем `GamePhase` как есть (для UI-индикатора «ночь/день») и добавляем `current_step_id` рядом? Или переделываем `GamePhase` целиком? Ответ: переделываем целиком
 ---
 
 ## 13. TL;DR
 
 - Граф из `Story → StoryStep → StoryTransition` + `StoryNarrationCue` для фраз
-- 9 типов шагов, 8 типов условий
+- 9 типов шагов, 8 атомарных предикатов + 3 композитных (all/any/not, рекурсивно)
 - Engine = walker по графу с `multiplier` и `context`
-- Karaoke = `word_timings` jsonb + фронт-подсветка
-- 7 этапов, обратная совместимость через feature-flag
-- Перед стартом — ответы на 8 вопросов из §12
+- Версионирование: правка создаёт новую `version+1`, старая живёт до окончания текущих сессий, затем cleanup
+- Karaoke = equally-spaced по `text + duration_ms`, поле `word_timings jsonb` под future work с whisper
+- Editor библиотека: `@xyflow/react`
+- Этап 2 переделывает `GamePhase` модель целиком
+- Этап 6 расширяется на CRUD ролей (для добавления «прокурора» и т.п.)
+- 7 этапов, коммит после каждого без push
 
-Готов читать комментарии и стартовать **этап 1** после согласования.
+---
+
+## 14. Гигиена админки (отдельный hot-fix)
+
+Независимые от story-engine задачи, требующие фикса до начала тестирования сюжетов на real-сессиях:
+
+### 14.1 Список активных сессий в админке
+
+Новый раздел `/admin/sessions/active` (или вкладка):
+- Таблица: `id`, `code`, `host_email`, `players_count`, `phase`, `started_at`, `last_activity_at`, действие «Прервать»
+- Endpoint `GET /api/admin/sessions/active?status=active,lobby` — paginate
+- Endpoint `POST /api/admin/sessions/{id}/abort` — переводит сессию в `status='aborted'`, шлёт WS `session_aborted` всем клиентам, чистит таймеры/runtime, генерирует `GameEvent(type='admin_aborted')`
+
+### 14.2 Audit abandoned sessions
+
+Проверить как обрабатывается сессия после всех disconnect'ов:
+- В `game_engine.py` есть ли логика «если все игроки disconnected > X минут → session.status = 'abandoned'`?
+- Если нет — добавить фоновый таймер в `recovery_loop`: каждые 60s проходит по `sessions WHERE status IN ('lobby','active')`, для каждой смотрит `last_player_activity_at` (нужно добавить колонку или использовать `players.last_seen_at`), если все > 30 минут — abort
+- Цель: чтобы админская таблица §14.1 не показывала «трупы» сессий
+
+### 14.3 Синтетические игроки
+
+Сейчас тест-игроки создаются с фейк-email и попадают в `users`. После окончания тест-сессии остаются в БД и засоряют админку.
+
+Решения:
+- **A (предпочтительный):** ввести флаг `users.is_synthetic bool`. Юзеры с этим флагом не показываются в админ-таблице юзеров. После `session.status IN ('completed', 'aborted', 'abandoned')` фоновый job удаляет всех `users WHERE is_synthetic=true AND NOT EXISTS (SELECT 1 FROM players p WHERE p.user_id = users.id AND p.session.status IN ('lobby','active'))`.
+- **B:** хранить тест-игроков в отдельной таблице `synthetic_players` без записи в `users`. Более чистая модель, но требует переделки auth/lobby.
+
+Для hot-fix — выбираем A. B — в backlog.
+
+### 14.4 Этапность hot-fix'а
+
+Как отдельный коммит **после** этапа 1 (чтобы не блокировать story engine), но **до** этапа 7. Реалистично совместить с этапом 4 (admin UI). Если приоритет высокий — могу сделать сразу после §1, до §2.
+
+---
+
+Готов стартовать **этап 1** после согласования.

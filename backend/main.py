@@ -22,6 +22,7 @@ from core.logging_middleware import RequestContextLoggingMiddleware
 from core.rate_limit import limiter, rate_limit_exceeded_handler
 from services.recovery_service import recovery_loop
 from services.role_catalog import ensure_role_catalog
+from services.story_seed import ensure_classic_mafia_story
 from services.timer_service import timer_service
 
 
@@ -42,6 +43,18 @@ async def lifespan(app: FastAPI):
     CancelledError, callback'и могут не успеть откатиться → коррапт state.
     """
     await ensure_role_catalog()
+    # Story Engine seed: идемпотентен (early-return если classic_mafia уже
+    # в БД). Любая ошибка (например рассинхрон миграций story_engine_tables)
+    # НЕ должна валить весь backend — иначе uvicorn падает и nginx отдаёт 502.
+    # Логируем и продолжаем; gameplay по legacy-пути продолжает работать.
+    try:
+        await ensure_classic_mafia_story()
+    except Exception:
+        log_exception(
+            logger,
+            "app.story_seed_failed",
+            "Failed to seed classic_mafia story — Story Engine may be unavailable",
+        )
     recovery_task = asyncio.create_task(recovery_loop())
     log_event(logger, logging.INFO, "app.started", "Backend startup completed", app_env=settings.APP_ENV)
 
@@ -182,6 +195,18 @@ app.include_router(observability_router, prefix="/api/observability", tags=["obs
 app.include_router(subscriptions_router, prefix="/api/subscriptions", tags=["subscriptions"])
 # /api/admin/users/* — управление is_admin флагами других юзеров. Гейт require_admin.
 app.include_router(admin_users_router, prefix="/api/admin", tags=["admin-users"])
+# /api/admin/stories/* — Story Engine CRUD. Тот же изоляционный паттерн что и
+# admin_narrator: ошибка импорта (например ещё не накатили story_engine_tables
+# миграцию) логируется, но не валит uvicorn.
+try:
+    from api.routers.admin_stories import router as admin_stories_router
+    app.include_router(admin_stories_router, prefix="/api/admin", tags=["admin-stories"])
+except Exception:
+    log_exception(
+        logger,
+        "app.admin_stories_disabled",
+        "Failed to mount admin_stories router — Story Engine admin will be unavailable",
+    )
 # admin_narrator-роутер изолируем: его импорт тянет models.narrator + services
 # narrator_*, которые требуют применённых миграций (narrator_tables, is_admin).
 # Если миграции не накатились / схема рассинхронизирована — импорт упадёт и
