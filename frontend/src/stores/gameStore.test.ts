@@ -204,4 +204,74 @@ describe('gameStore role reveal sync', () => {
     expect(state.currentAnnouncement?.text).toBe('Фоновая реплика');
     expect(state.screen).toBe('day_discussion');
   });
+
+  it('resets stale awaitingAction and availableTargets on phase transition', () => {
+    // Bug regression: after day voting (per-user phase_changed sets
+    // awaiting_action=true, available_targets=[...]) → night start
+    // (broadcast phase_changed without these fields). Без сброса
+    // не-актёры видели NightActionScreen с карточками голосования.
+    useGameStore.setState({
+      phase: {
+        id: 'phase-day-1',
+        type: 'day',
+        number: 1,
+        sub_phase: 'voting',
+        started_at: '2026-04-14T12:00:00.000Z',
+        timer_seconds: 30,
+        timer_started_at: '2026-04-14T12:00:00.000Z',
+      },
+      screen: 'day_voting',
+      awaitingAction: true,
+      availableTargets: [
+        { player_id: 'p2', name: 'Жертва' },
+        { player_id: 'p3', name: 'Игрок 3' },
+      ],
+    });
+
+    // Backend broadcasts phase_changed for night without
+    // awaiting_action/available_targets — non-actors must not retain stale state.
+    useGameStore.getState().applyPhase({
+      phase: { type: 'night', number: 2 },
+      timer_seconds: 25,
+      timer_started_at: '2026-04-14T12:01:00.000Z',
+    });
+
+    const state = useGameStore.getState();
+    expect(state.awaitingAction).toBe(false);
+    expect(state.availableTargets).toEqual([]);
+    expect(state.screen).toBe('night_waiting');
+  });
+
+  it('preserves availableTargets within the same phase (game_resumed scenario)', () => {
+    // Регрессионный тест: game_resumed шлёт phase + timer без action-полей.
+    // В рамках одной фазы (sameActionWindow) state.availableTargets должен
+    // сохраняться, иначе плашки исчезают сразу после resume.
+    useGameStore.setState({
+      phase: {
+        id: 'night-1',
+        type: 'night',
+        number: 1,
+        sub_phase: null,
+        started_at: '2026-04-14T12:00:00.000Z',
+        timer_seconds: 25,
+        timer_started_at: '2026-04-14T12:00:00.000Z',
+      },
+      screen: 'night_action',
+      awaitingAction: true,
+      actionType: 'kill',
+      availableTargets: [{ player_id: 'p2', name: 'Жертва' }],
+    });
+
+    // game_resumed — та же фаза, без action-полей.
+    useGameStore.getState().applyPhase({
+      phase: { type: 'night', number: 1 },
+      timer_seconds: 20,
+      timer_started_at: '2026-04-14T12:00:00.000Z',
+    });
+
+    const state = useGameStore.getState();
+    expect(state.awaitingAction).toBe(true);
+    expect(state.availableTargets).toEqual([{ player_id: 'p2', name: 'Жертва' }]);
+    expect(state.actionType).toBe('kill');
+  });
 });
