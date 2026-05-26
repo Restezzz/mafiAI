@@ -15,6 +15,7 @@ import ConditionEditor, {
   Condition,
 } from '../../components/admin/ConditionEditor';
 import CueListEditor from '../../components/admin/CueListEditor';
+import StepPayloadEditor from '../../components/admin/StepPayloadEditor';
 import { adminNarratorApi } from '../../api/adminNarratorApi';
 import { Trigger } from '../../types/narrator';
 
@@ -359,7 +360,7 @@ export default function AdminStoryEditorPage() {
                 {Object.keys(step.payload).length > 0 && (
                   <details style={{ marginTop: 6 }}>
                     <summary className="admin-row__hint" style={{ cursor: 'pointer' }}>
-                      payload
+                      payload (текущий)
                     </summary>
                     <pre style={{
                       margin: '4px 0 0', padding: 8, fontSize: 11,
@@ -369,6 +370,11 @@ export default function AdminStoryEditorPage() {
                     </pre>
                   </details>
                 )}
+                <StepPayloadEditor
+                  storyId={story.id}
+                  step={step}
+                  onSaved={fetchStory}
+                />
                 {step.kind === 'narration' && (
                   <CueListEditor
                     storyId={story.id}
