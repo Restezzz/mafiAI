@@ -5,11 +5,15 @@ import {
   StoryReadFull,
   StoryStep,
   StoryStepKind,
+  StoryTransition,
 } from '../../api/adminStoriesApi';
 import { logger } from '../../services/logger';
 import { parseApiError } from '../../utils/parseApiError';
 import { getApiErrorMessage } from '../../utils/getApiErrorMessage';
 import StoryGraphView from '../../components/admin/StoryGraphView';
+import ConditionEditor, {
+  Condition,
+} from '../../components/admin/ConditionEditor';
 
 
 /**
@@ -167,6 +171,30 @@ export default function AdminStoryEditorPage() {
           error: parseApiError(err),
           storyId,
           ...form,
+        });
+      }
+    },
+    [storyId, fetchStory],
+  );
+
+  const handleSaveTransition = useCallback(
+    async (transitionId: string, payload: { condition: Condition | null; priority: number }) => {
+      if (!storyId) return;
+      setOpError('');
+      try {
+        await adminStoriesApi.updateTransition(storyId, transitionId, {
+          condition: payload.condition as Record<string, unknown> | null,
+          unset_condition: payload.condition === null,
+          priority: payload.priority,
+        });
+        await fetchStory();
+      } catch (err) {
+        const msg = getApiErrorMessage(err) ?? 'Не удалось сохранить переход';
+        setOpError(msg);
+        logger.warn('admin.story.update_transition_failed', msg, {
+          error: parseApiError(err),
+          storyId,
+          transitionId,
         });
       }
     },
@@ -358,41 +386,14 @@ export default function AdminStoryEditorPage() {
               const fromStep = stepByIdMap.get(t.from_step_id);
               const toStep = stepByIdMap.get(t.to_step_id);
               return (
-                <div
+                <TransitionRow
                   key={t.id}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: 4,
-                    background: t.condition ? '#1a1d22' : '#0f1115',
-                    border: t.condition ? '1px solid #4a4d52' : '1px solid #2a2d33',
-                    fontSize: 13,
-                  }}
-                >
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-                    <code>{fromStep?.slug ?? '?'}</code>
-                    <span>→</span>
-                    <code>{toStep?.slug ?? '?'}</code>
-                    <span className="admin-row__hint">priority={t.priority}</span>
-                    {!t.condition && (
-                      <span className="admin-row__hint" style={{ fontStyle: 'italic' }}>
-                        безусловный
-                      </span>
-                    )}
-                  </div>
-                  {t.condition && (
-                    <details style={{ marginTop: 4 }}>
-                      <summary className="admin-row__hint" style={{ cursor: 'pointer' }}>
-                        condition
-                      </summary>
-                      <pre style={{
-                        margin: '4px 0 0', padding: 6, fontSize: 11,
-                        background: '#0a0b0e', borderRadius: 4, overflow: 'auto',
-                      }}>
-                        {JSON.stringify(t.condition, null, 2)}
-                      </pre>
-                    </details>
-                  )}
-                </div>
+                  transition={t}
+                  fromSlug={fromStep?.slug}
+                  toSlug={toStep?.slug}
+                  onSave={(payload) => handleSaveTransition(t.id, payload)}
+                  onDelete={() => handleDeleteTransition(t.id)}
+                />
               );
             })}
           </div>
@@ -466,6 +467,157 @@ export default function AdminStoryEditorPage() {
       )}
     </>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Строка transition с inline-editor'ом condition и priority.
+// ---------------------------------------------------------------------------
+function TransitionRow({
+  transition,
+  fromSlug,
+  toSlug,
+  onSave,
+  onDelete,
+}: {
+  transition: StoryTransition;
+  fromSlug?: string;
+  toSlug?: string;
+  onSave: (payload: { condition: Condition | null; priority: number }) => Promise<void> | void;
+  onDelete: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draftCondition, setDraftCondition] = useState<Condition | null>(
+    transition.condition as Condition | null,
+  );
+  const [draftPriority, setDraftPriority] = useState(transition.priority);
+  const [saving, setSaving] = useState(false);
+
+  const beginEdit = () => {
+    setDraftCondition(transition.condition as Condition | null);
+    setDraftPriority(transition.priority);
+    setEditing(true);
+  };
+
+  const cancelEdit = () => {
+    setEditing(false);
+    setDraftCondition(transition.condition as Condition | null);
+    setDraftPriority(transition.priority);
+  };
+
+  const submit = async () => {
+    setSaving(true);
+    try {
+      await onSave({ condition: draftCondition, priority: draftPriority });
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        padding: '6px 12px',
+        borderRadius: 4,
+        background: transition.condition ? '#1a1d22' : '#0f1115',
+        border: transition.condition ? '1px solid #4a4d52' : '1px solid #2a2d33',
+        fontSize: 13,
+      }}
+    >
+      <div style={{
+        display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap',
+      }}>
+        <code>{fromSlug ?? '?'}</code>
+        <span>→</span>
+        <code>{toSlug ?? '?'}</code>
+        <span className="admin-row__hint">priority={transition.priority}</span>
+        {!transition.condition && (
+          <span className="admin-row__hint" style={{ fontStyle: 'italic' }}>
+            безусловный
+          </span>
+        )}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+          {!editing && (
+            <>
+              <button
+                type="button"
+                onClick={beginEdit}
+                style={miniBtnStyle('#1a3a4f', '#2a5a7f', '#a4c8e8')}
+              >
+                ✎ редактировать
+              </button>
+              <button
+                type="button"
+                onClick={onDelete}
+                style={miniBtnStyle('#3a1d22', '#5a2d33', '#e89595')}
+              >
+                ✕ удалить
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {!editing && transition.condition && (
+        <details style={{ marginTop: 4 }}>
+          <summary className="admin-row__hint" style={{ cursor: 'pointer' }}>
+            condition (JSON)
+          </summary>
+          <pre style={{
+            margin: '4px 0 0', padding: 6, fontSize: 11,
+            background: '#0a0b0e', borderRadius: 4, overflow: 'auto',
+          }}>
+            {JSON.stringify(transition.condition, null, 2)}
+          </pre>
+        </details>
+      )}
+
+      {editing && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+            <span style={{ fontSize: 11, opacity: 0.7 }}>priority</span>
+            <input
+              type="number"
+              value={draftPriority}
+              onChange={(e) => setDraftPriority(Number(e.target.value))}
+              style={{
+                width: 80, padding: '4px 6px', background: '#0a0b0e',
+                border: '1px solid #2a2d33', borderRadius: 3,
+                color: '#e8e9eb', fontSize: 12,
+              }}
+            />
+          </div>
+          <ConditionEditor value={draftCondition} onChange={setDraftCondition} />
+          <div style={{ display: 'flex', gap: 6, marginTop: 6, justifyContent: 'flex-end' }}>
+            <button
+              type="button"
+              onClick={cancelEdit}
+              disabled={saving}
+              style={miniBtnStyle('#2a2d33', '#4a4d52', '#c0c2c8')}
+            >
+              Отмена
+            </button>
+            <button
+              type="button"
+              onClick={submit}
+              disabled={saving}
+              style={miniBtnStyle('#1a3a22', '#2a5a33', '#a4e8b8')}
+            >
+              {saving ? 'Сохранение…' : 'Сохранить'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function miniBtnStyle(bg: string, border: string, color: string): React.CSSProperties {
+  return {
+    fontSize: 11, padding: '3px 8px',
+    background: bg, border: `1px solid ${border}`,
+    color, borderRadius: 3, cursor: 'pointer',
+  };
 }
 
 // ---------------------------------------------------------------------------
