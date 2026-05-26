@@ -8,6 +8,7 @@ import {
 import { logger } from '../../services/logger';
 import { parseApiError } from '../../utils/parseApiError';
 import { getApiErrorMessage } from '../../utils/getApiErrorMessage';
+import StoryGraphView from '../../components/admin/StoryGraphView';
 
 
 /**
@@ -26,6 +27,7 @@ export default function AdminStoryEditorPage() {
   const [story, setStory] = useState<StoryReadFull | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!storyId) {
@@ -283,12 +285,38 @@ export default function AdminStoryEditorPage() {
         </div>
 
         <div className="admin-card">
-          <h3 style={{ marginTop: 0, marginBottom: 8 }}>Visual editor</h3>
-          <p className="admin-row__hint" style={{ margin: 0 }}>
-            Drag-n-drop редактор графа на @xyflow/react появится в этапе 4.2.
-            Пока используйте API напрямую или дублируйте сюжет и редактируйте
-            JSON-снапшот через Export → правка → Import.
+          <h3 style={{ marginTop: 0, marginBottom: 8 }}>Visual graph</h3>
+          <p className="admin-row__hint" style={{ marginTop: 0 }}>
+            Перетаскивайте узлы — позиция сохранится автоматически.
+            Создание шагов / переходов / редактирование cues — пока через API
+            или Import/Export. Клик по ноде — выделение синхронно с таблицей шагов выше.
           </p>
+          <StoryGraphView story={story} onSelectStep={setSelectedStepId} />
+          {selectedStepId && (() => {
+            const sel = stepByIdMap.get(selectedStepId);
+            if (!sel) return null;
+            return (
+              <div style={{
+                marginTop: 12, padding: 10,
+                border: '1px solid #4a4d52', borderRadius: 6,
+                background: '#0f1115', fontSize: 12,
+              }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                  <strong style={{ fontFamily: 'monospace' }}>{sel.slug}</strong>
+                  <span className="admin-row__hint">{sel.kind}</span>
+                </div>
+                {sel.label && <div style={{ marginTop: 4 }}>{sel.label}</div>}
+                {Object.keys(sel.payload).length > 0 && (
+                  <pre style={{
+                    margin: '6px 0 0', padding: 6, fontSize: 11,
+                    background: '#1a1d22', borderRadius: 4, overflow: 'auto',
+                  }}>
+                    {JSON.stringify(sel.payload, null, 2)}
+                  </pre>
+                )}
+              </div>
+            );
+          })()}
         </div>
       </div>
     </>
