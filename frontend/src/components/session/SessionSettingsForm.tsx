@@ -208,21 +208,68 @@ export default function SessionSettingsForm({
             <span>Использовать новый сюжетный движок</span>
           </label>
           {useStoryEngine && (
-            <label className="settings-form__story-select">
-              <span className="settings-form__story-select-label">Сюжет</span>
-              <select
-                value={currentStoryId}
-                onChange={(e) =>
-                  onChangeTimers({ story_id: e.target.value || null })
-                }
-              >
-                {stories.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} (v{s.version})
-                  </option>
-                ))}
-              </select>
-            </label>
+            <>
+              <label className="settings-form__story-select">
+                <span className="settings-form__story-select-label">Сюжет</span>
+                <select
+                  value={currentStoryId}
+                  onChange={(e) =>
+                    onChangeTimers({ story_id: e.target.value || null })
+                  }
+                >
+                  {stories.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} (v{s.version})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {/*
+                Pre-game overrides (этап 3). null = используется дефолт сюжета.
+                Слайдеры показывают override; чтобы вернуть дефолт — кнопка
+                «Сброс». Backend (StorySettings) применяет override поверх
+                story.settings_default.
+              */}
+              <Slider
+                label={`Множитель таймеров${
+                  settings.timer_multiplier == null ? ' (дефолт сюжета)' : ''
+                }`}
+                value={settings.timer_multiplier ?? 1.0}
+                min={0.5}
+                max={2.0}
+                step={0.05}
+                unit="x"
+                onChange={(v) => onChangeTimers({ timer_multiplier: v })}
+              />
+              <Slider
+                label={`Пауза между фразами${
+                  settings.inter_cue_pause_seconds == null
+                    ? ' (дефолт сюжета)'
+                    : ''
+                }`}
+                value={settings.inter_cue_pause_seconds ?? 0}
+                min={0}
+                max={5}
+                step={0.1}
+                unit="с"
+                onChange={(v) => onChangeTimers({ inter_cue_pause_seconds: v })}
+              />
+              {(settings.timer_multiplier != null ||
+                settings.inter_cue_pause_seconds != null) && (
+                <button
+                  type="button"
+                  className="settings-form__reset-btn"
+                  onClick={() =>
+                    onChangeTimers({
+                      timer_multiplier: null,
+                      inter_cue_pause_seconds: null,
+                    })
+                  }
+                >
+                  Сбросить overrides к дефолту сюжета
+                </button>
+              )}
+            </>
           )}
         </section>
       )}

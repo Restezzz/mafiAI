@@ -184,6 +184,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (newSettings.story_id !== undefined) {
       payload.story_id = newSettings.story_id;
     }
+    if (newSettings.timer_multiplier !== undefined) {
+      payload.timer_multiplier = newSettings.timer_multiplier;
+    }
+    if (newSettings.inter_cue_pause_seconds !== undefined) {
+      payload.inter_cue_pause_seconds = newSettings.inter_cue_pause_seconds;
+    }
     const response = await sessionApi.updateSettings(state.session.id, payload);
     const updated = response.data?.settings as SessionSettings | undefined;
     if (updated) {

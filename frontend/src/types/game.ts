@@ -118,6 +118,11 @@ export interface SessionSettings {
   // прокидывается через тот же settings-form для удобства UI.
   use_story_engine?: boolean;
   story_id?: string | null;
+  // Story Engine pre-game overrides (этап 3). Накладываются поверх
+  // story.settings.{timer_multiplier_default, inter_cue_pause_seconds}.
+  // null/undefined = «использовать дефолт сюжета».
+  timer_multiplier?: number | null;
+  inter_cue_pause_seconds?: number | null;
 }
 
 export interface DevLobbyPlayerLink {

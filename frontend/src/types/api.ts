@@ -125,6 +125,9 @@ export interface UpdateSettingsRequest {
   // Story Engine (этап 2.6).
   use_story_engine?: boolean;
   story_id?: string | null;
+  // Story Engine pre-game overrides (этап 3).
+  timer_multiplier?: number | null;
+  inter_cue_pause_seconds?: number | null;
 }
 
 export interface UpdateSettingsResponse {

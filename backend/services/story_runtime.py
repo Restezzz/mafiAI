@@ -547,16 +547,12 @@ async def _handle_narration(session_id: uuid.UUID, step: StoryStep) -> None:
             )
             return
 
-        # Подтягиваем настройки сюжета для karaoke флага. Если settings нет —
-        # дефолт True (karaoke включён в seed Classic Mafia).
+        # Подтягиваем эффективные настройки сюжета: story.settings базовое +
+        # session.settings.{timer_multiplier, inter_cue_pause_seconds} как
+        # overrides (этап 3). Если ничего не задано — дефолты
+        # (karaoke=True, multiplier=1.0, pause=0.0).
         session = await db.get(Session, session_id)
-        karaoke_enabled = True
-        if session and session.story_id:
-            settings_row = await db.scalar(
-                select(StorySettings).where(StorySettings.story_id == session.story_id)
-            )
-            if settings_row is not None:
-                karaoke_enabled = settings_row.karaoke_enabled
+        eff = await _load_effective_settings(db, session)
 
         phase_payload = {
             "phase": {"type": phase.phase_type, "number": phase.phase_number},
@@ -564,7 +560,12 @@ async def _handle_narration(session_id: uuid.UUID, step: StoryStep) -> None:
             "timer_seconds": None,
             "timer_started_at": None,
         }
-        narration_steps = _build_narration_steps(step, cues, karaoke=karaoke_enabled)
+        narration_steps = _build_narration_steps(
+            step, cues,
+            karaoke=eff["karaoke"],
+            multiplier=eff["multiplier"],
+            inter_cue_pause_ms=int(eff["inter_cue_pause_seconds"] * 1000),
+        )
         await _play_phase_announcements(
             session_id,
             phase_payload,
@@ -580,27 +581,101 @@ def _build_narration_steps(
     cues: list[StoryNarrationCue],
     *,
     karaoke: bool = False,
+    multiplier: float = 1.0,
+    inter_cue_pause_ms: int = 0,
 ) -> list[dict[str, Any]]:
     """Преобразует ORM-cues в формат ожидаемый ``resolve_steps``.
 
     Каждый cue → dict с ключами trigger / text / duration_ms / step_index /
-    steps_total / karaoke. ``trigger_slug`` берётся из relationship
-    (eager loaded), fallback на None если триггер удалили.
+    steps_total / karaoke / post_pause_ms. ``trigger_slug`` берётся из
+    relationship (eager loaded), fallback на None если триггер удалили.
+
+    ``multiplier`` (этап 3) умножает override_duration_ms (если задано) —
+    None оставляем None, тогда фронт/audio_manifest сам вычислит длительность
+    через mp3-длину (multiplier на это влияет на стороне фронта неявно через
+    хост, но мы сохраняем consistency).
+
+    ``inter_cue_pause_ms`` добавляется в ``post_pause_ms`` каждого cue кроме
+    последнего — пауза между фразами одного narration-step. Сам cue также
+    может задавать ``pause_after_ms`` (per-cue), они складываются.
     """
     total = len(cues)
     items: list[dict[str, Any]] = []
     for idx, cue in enumerate(cues, start=1):
         trigger_slug = cue.trigger.slug if cue.trigger else None
+        scaled_duration = cue.override_duration_ms
+        if scaled_duration is not None and multiplier != 1.0:
+            scaled_duration = int(scaled_duration * multiplier)
+        # Per-cue pause_before/after — pause_after_ms (сейчас не используется
+        # в _wait_seconds_for, оставлено для будущего расширения).
+        post_pause = int(getattr(cue, "pause_after_ms", 0) or 0)
+        if idx < total:
+            post_pause += inter_cue_pause_ms
         item: dict[str, Any] = {
             "step_index": idx,
             "steps_total": total,
             "trigger": trigger_slug,
             "text": cue.override_text,
-            "duration_ms": cue.override_duration_ms,
+            "duration_ms": scaled_duration,
             "karaoke": karaoke,
+            "post_pause_ms": post_pause,
         }
         items.append(item)
     return items
+
+
+async def _load_effective_settings(
+    db, session
+) -> dict[str, Any]:
+    """Загружает эффективные настройки сюжета для сессии.
+
+    Алгоритм (этап 3):
+    1. Базовые значения из ``StorySettings`` (per story_id) — если строка есть.
+    2. Поверх — overrides из ``session.settings`` (jsonb): ``timer_multiplier``,
+       ``inter_cue_pause_seconds``, ``karaoke_enabled``. None в overrides
+       означает «использовать базовое».
+    3. Финальные дефолты если ничего не нашли: karaoke=True, multiplier=1.0,
+       pause=0.0 (зеркалит server_default из StorySettings).
+
+    Возвращает dict {karaoke: bool, multiplier: float,
+    inter_cue_pause_seconds: float}.
+    """
+    karaoke = True
+    multiplier = 1.0
+    pause_s = 0.0
+
+    if session and session.story_id:
+        settings_row = await db.scalar(
+            select(StorySettings).where(StorySettings.story_id == session.story_id)
+        )
+        if settings_row is not None:
+            karaoke = bool(settings_row.karaoke_enabled)
+            try:
+                multiplier = float(settings_row.timer_multiplier_default)
+            except (TypeError, ValueError):
+                multiplier = 1.0
+            try:
+                pause_s = float(settings_row.inter_cue_pause_seconds)
+            except (TypeError, ValueError):
+                pause_s = 0.0
+
+    overrides = (session.settings or {}) if session else {}
+    if overrides.get("timer_multiplier") is not None:
+        try:
+            multiplier = float(overrides["timer_multiplier"])
+        except (TypeError, ValueError):
+            pass
+    if overrides.get("inter_cue_pause_seconds") is not None:
+        try:
+            pause_s = float(overrides["inter_cue_pause_seconds"])
+        except (TypeError, ValueError):
+            pass
+
+    return {
+        "karaoke": karaoke,
+        "multiplier": multiplier,
+        "inter_cue_pause_seconds": pause_s,
+    }
 
 
 async def _handle_branch(session_id: uuid.UUID, step: StoryStep) -> None:
@@ -618,6 +693,9 @@ async def _handle_pause(session_id: uuid.UUID, step: StoryStep) -> None:
 
     Используется для inter-cue gap'ов между крупными секциями (если admin
     хочет 2-3 секунды тишины между «Доктор закрыл глаза» и «Утро»).
+
+    Этап 3: длительность умножается на effective timer_multiplier — если
+    хост ускорил/замедлил всё в 2 раза, паузы тоже масштабируются.
     """
     duration_ms = int(step.payload.get("duration_ms", 1000))
     if duration_ms <= 0:
@@ -625,7 +703,13 @@ async def _handle_pause(session_id: uuid.UUID, step: StoryStep) -> None:
     # Локальный импорт чтобы не тянуть game_engine в test env без БД.
     from services.game_engine import _wait_or_pause
 
-    await _wait_or_pause(session_id, duration_ms / 1000)
+    async with async_session_factory() as db:
+        session = await db.get(Session, session_id)
+        eff = await _load_effective_settings(db, session)
+    scaled_ms = int(duration_ms * eff["multiplier"])
+    if scaled_ms <= 0:
+        return
+    await _wait_or_pause(session_id, scaled_ms / 1000)
 
 
 async def _handle_end(session_id: uuid.UUID, step: StoryStep) -> None:

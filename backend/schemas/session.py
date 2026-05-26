@@ -153,3 +153,10 @@ class UpdateSettingsRequest(BaseModel):
     #   legacy путь. Дефолт false на проде до этапа 7.
     story_id: uuid.UUID | None = None
     use_story_engine: bool | None = None
+    # Story Engine pre-game overrides (этап 3). Накладываются поверх
+    # story.settings (StorySettings.timer_multiplier_default,
+    # inter_cue_pause_seconds). None означает «использовать дефолт сюжета».
+    # CHECK-диапазоны совпадают с теми, что в StorySettings (см.
+    # models/story.py).
+    timer_multiplier: float | None = Field(default=None, ge=0.5, le=2.0)
+    inter_cue_pause_seconds: float | None = Field(default=None, ge=0.0, le=60.0)

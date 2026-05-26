@@ -279,10 +279,19 @@ _ANNOUNCEMENT_GRACE_MS = 150
 
 
 def _wait_seconds_for(announcement: dict | None) -> float:
-    duration_ms = (announcement or {}).get("duration_ms") or 0
-    if duration_ms <= 0:
+    """Сколько ждать после WS-эмита announcement'а до следующего шага.
+
+    Story Engine (этап 3) добавляет ``post_pause_ms`` к каждому cue (тихая
+    пауза между фразами одного narration-step). Legacy путь не задаёт это
+    поле, так что get(..., 0) — backward-compat.
+    """
+    a = announcement or {}
+    duration_ms = a.get("duration_ms") or 0
+    post_pause_ms = a.get("post_pause_ms") or 0
+    if duration_ms <= 0 and post_pause_ms <= 0:
         return 0.0
-    return (duration_ms + _ANNOUNCEMENT_GRACE_MS) / 1000
+    base = duration_ms + _ANNOUNCEMENT_GRACE_MS if duration_ms > 0 else 0
+    return (base + post_pause_ms) / 1000
 
 
 async def _play_phase_announcements(
