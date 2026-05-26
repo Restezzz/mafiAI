@@ -1,10 +1,51 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useNarrationAudio } from '../../hooks/useNarrationAudio';
 import AmbientBackground from '../ui/AmbientBackground';
 import ProgressBar from '../ui/ProgressBar';
 import { serverNow } from '../../utils/serverClock';
 import './NarratorScreen.scss';
+
+/**
+ * Разбивает текст на слова с пробелами/пунктуацией.
+ * Возвращает массив сегментов где каждый — либо слово (word=true) либо
+ * пробел/пунктуация (word=false). Это нужно чтобы при подсветке active-word
+ * сохранить оригинальные пробелы и знаки препинания.
+ *
+ * Пример: "Привет, мир!" → [
+ *   {text: "Привет", word: true},
+ *   {text: ",", word: false},
+ *   {text: " ", word: false},
+ *   {text: "мир", word: true},
+ *   {text: "!", word: false},
+ * ]
+ */
+interface WordSegment {
+  text: string;
+  word: boolean;
+  wordIndex?: number; // только для word=true
+}
+
+function splitToWords(text: string): { segments: WordSegment[]; wordCount: number } {
+  // Split с capturing group сохраняет разделители в результирующем массиве.
+  // Это позволяет различать слова и whitespace (включая многократные пробелы
+  // и newlines). Пунктуация остаётся прицепленной к слову — для karaoke
+  // подсветки это не критично.
+  // Простой regex без unicode-flag для совместимости с es5 target в tsconfig.
+  const parts = text.split(/(\s+)/);
+  const segments: WordSegment[] = [];
+  let wordCount = 0;
+  for (const part of parts) {
+    if (!part) continue;
+    const isSpace = /^\s+$/.test(part);
+    if (isSpace) {
+      segments.push({ text: part, word: false });
+    } else {
+      segments.push({ text: part, word: true, wordIndex: wordCount++ });
+    }
+  }
+  return { segments, wordCount };
+}
 
 // Дефолтный шаг — используется только если нет duration_ms у announcement
 // (т.е. text-only fallback без аудио).
@@ -53,6 +94,27 @@ export default function NarratorScreen() {
   const announcementKey = announcement?.key ?? currentText;
   const startedAtMs = getStartedAtMs(announcement?.started_at);
   const durationMs = announcement?.duration_ms;
+  const karaoke = announcement?.karaoke === true;
+
+  // Karaoke: разбиваем текст на слова + сегменты пробелов один раз на announcement.
+  // Memo чтобы splitToWords не дёргался при каждом tick'е.
+  const { segments: wordSegments, wordCount } = useMemo(
+    () => (karaoke ? splitToWords(currentText) : { segments: [] as WordSegment[], wordCount: 0 }),
+    [karaoke, currentText],
+  );
+
+  // activeWordIndex = floor(elapsed / msPerWord). Если перед стартом / нет
+  // duration — -1 (никакое слово не активно). После окончания — wordCount-1.
+  const computeActiveWord = (now: number): number => {
+    if (!karaoke || wordCount === 0 || startedAtMs === null || !durationMs || durationMs <= 0) {
+      return -1;
+    }
+    const elapsed = Math.max(0, now - startedAtMs);
+    const msPerWord = durationMs / wordCount;
+    const idx = Math.floor(elapsed / msPerWord);
+    return Math.min(wordCount - 1, idx);
+  };
+  const [activeWord, setActiveWord] = useState(() => computeActiveWord(serverNow()));
 
   // Сразу при mount/смене announcement — догоняем то место, где должен быть typewriter
   // согласно server-time. Это синхронизирует разные клиенты и refresh-нутые вкладки.
@@ -72,9 +134,11 @@ export default function NarratorScreen() {
 
   // При смене announcement пересчитать «откуда продолжать».
   useEffect(() => {
-    const next = computeDisplayedChars(currentText.length, startedAtMs, serverNow(), durationMs);
+    const now = serverNow();
+    const next = computeDisplayedChars(currentText.length, startedAtMs, now, durationMs);
     setDisplayedChars(next);
-    setProgress(computeProgress(durationMs, startedAtMs, currentText.length, next, serverNow()));
+    setProgress(computeProgress(durationMs, startedAtMs, currentText.length, next, now));
+    setActiveWord(computeActiveWord(now));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [announcementKey]);
 
@@ -86,6 +150,10 @@ export default function NarratorScreen() {
       const nextChars = computeDisplayedChars(currentText.length, startedAtMs, now, durationMs);
       setDisplayedChars((prev) => (nextChars > prev ? nextChars : prev));
       setProgress(computeProgress(durationMs, startedAtMs, currentText.length, nextChars, now));
+      if (karaoke) {
+        const w = computeActiveWord(now);
+        setActiveWord((prev) => (w > prev ? w : prev));
+      }
       const allDone =
         nextChars >= currentText.length &&
         (!startedAtMs || !durationMs || now - startedAtMs >= durationMs);
@@ -124,15 +192,34 @@ export default function NarratorScreen() {
         </div>
 
         <div className="narrator-screen__text-container">
-          <p className="narrator-screen__text">
-            {currentText.split('').map((char, i) => (
-              <span
-                key={`${announcement?.key ?? 'announcement'}-${i}`}
-                className={`narrator-char ${i < displayedChars ? 'narrator-char--visible' : ''}`}
-              >
-                {char}
-              </span>
-            ))}
+          <p className={`narrator-screen__text${karaoke ? ' narrator-screen__text--karaoke' : ''}`}>
+            {karaoke
+              ? wordSegments.map((seg, i) => {
+                  if (!seg.word) {
+                    // Whitespace / пробелы — рендерим как есть.
+                    return <span key={`${announcement?.key ?? 'a'}-s-${i}`}>{seg.text}</span>;
+                  }
+                  const idx = seg.wordIndex ?? -1;
+                  const cls =
+                    idx === activeWord
+                      ? 'narrator-word narrator-word--active'
+                      : idx < activeWord
+                      ? 'narrator-word narrator-word--past'
+                      : 'narrator-word';
+                  return (
+                    <span key={`${announcement?.key ?? 'a'}-w-${idx}`} className={cls}>
+                      {seg.text}
+                    </span>
+                  );
+                })
+              : currentText.split('').map((char, i) => (
+                  <span
+                    key={`${announcement?.key ?? 'announcement'}-${i}`}
+                    className={`narrator-char ${i < displayedChars ? 'narrator-char--visible' : ''}`}
+                  >
+                    {char}
+                  </span>
+                ))}
           </p>
         </div>
 

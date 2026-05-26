@@ -58,6 +58,12 @@ export interface Announcement {
   // ISO8601, момент когда сервер начал «озвучивать» — нужен для синхронизации
   // typewriter/прогресс-бара между клиентами и при reload/перезаходе на страницу.
   started_at?: string;
+  // Story Engine: если true, NarratorScreen рендерит подсветку слов (karaoke)
+  // вместо per-char typewriter'а. Equally-spaced распределение по словам —
+  // duration_ms / words.length мс на слово. Источник: story.settings.karaoke_enabled
+  // прокидывается в _build_narration_steps. Legacy путь не задаёт это поле
+  // (остаётся undefined → per-char typewriter).
+  karaoke?: boolean;
 }
 
 export interface MyPlayer {

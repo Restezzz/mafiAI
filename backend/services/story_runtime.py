@@ -518,7 +518,11 @@ async def _handle_narration(session_id: uuid.UUID, step: StoryStep) -> None:
 
     Cues конвертируются в формат ожидаемый ``resolve_steps``:
       [{"step_index": 1, "steps_total": N, "trigger": "<slug>",
-        "text": "<override or null>", "duration_ms": <override or null>}, ...]
+        "text": "<override or null>", "duration_ms": <override or null>,
+        "karaoke": <bool из story.settings.karaoke_enabled>}, ...]
+
+    ``karaoke`` флаг пробрасывается во фронт через announcement — фронт
+    выбирает режим рендеринга (per-word подсветка vs per-char typewriter).
     """
     # Локальный импорт чтобы избежать циклической зависимости
     # game_engine ↔ story_runtime (game_engine может быть импортирован
@@ -542,13 +546,25 @@ async def _handle_narration(session_id: uuid.UUID, step: StoryStep) -> None:
                 step_slug=step.slug,
             )
             return
+
+        # Подтягиваем настройки сюжета для karaoke флага. Если settings нет —
+        # дефолт True (karaoke включён в seed Classic Mafia).
+        session = await db.get(Session, session_id)
+        karaoke_enabled = True
+        if session and session.story_id:
+            settings_row = await db.scalar(
+                select(StorySettings).where(StorySettings.story_id == session.story_id)
+            )
+            if settings_row is not None:
+                karaoke_enabled = settings_row.karaoke_enabled
+
         phase_payload = {
             "phase": {"type": phase.phase_type, "number": phase.phase_number},
             "sub_phase": None,
             "timer_seconds": None,
             "timer_started_at": None,
         }
-        narration_steps = _build_narration_steps(step, cues)
+        narration_steps = _build_narration_steps(step, cues, karaoke=karaoke_enabled)
         await _play_phase_announcements(
             session_id,
             phase_payload,
@@ -560,13 +576,16 @@ async def _handle_narration(session_id: uuid.UUID, step: StoryStep) -> None:
 
 
 def _build_narration_steps(
-    step: StoryStep, cues: list[StoryNarrationCue]
+    step: StoryStep,
+    cues: list[StoryNarrationCue],
+    *,
+    karaoke: bool = False,
 ) -> list[dict[str, Any]]:
     """Преобразует ORM-cues в формат ожидаемый ``resolve_steps``.
 
     Каждый cue → dict с ключами trigger / text / duration_ms / step_index /
-    steps_total. ``trigger_slug`` берётся из relationship (eager loaded),
-    fallback на None если триггер удалили.
+    steps_total / karaoke. ``trigger_slug`` берётся из relationship
+    (eager loaded), fallback на None если триггер удалили.
     """
     total = len(cues)
     items: list[dict[str, Any]] = []
@@ -578,6 +597,7 @@ def _build_narration_steps(
             "trigger": trigger_slug,
             "text": cue.override_text,
             "duration_ms": cue.override_duration_ms,
+            "karaoke": karaoke,
         }
         items.append(item)
     return items
