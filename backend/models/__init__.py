@@ -27,6 +27,7 @@ from models.story import (
     StoryNarrationCue,
     StoryTransition,
 )
+from models.session_story_state import SessionStoryState
 
 __all__ = [
     "User",
@@ -52,4 +53,5 @@ __all__ = [
     "StoryStep",
     "StoryNarrationCue",
     "StoryTransition",
+    "SessionStoryState",
 ]

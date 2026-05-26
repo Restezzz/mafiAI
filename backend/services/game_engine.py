@@ -572,7 +572,7 @@ async def start_game(db: AsyncSession, session: Session) -> None:
     async def _on_role_reveal_timeout():
         # Запускаем как отдельную фоновую задачу, чтобы не блокировать
         # колбэк таймера собственным await-циклом execute_night_sequence.
-        asyncio.create_task(transition_to_night(session.id, 1))
+        asyncio.create_task(_enter_first_night_or_story(session.id))
 
     await timer_service.start_timer(session.id, "role_reveal", timer_seconds, _on_role_reveal_timeout)
 
@@ -645,7 +645,7 @@ async def acknowledge_role(db: AsyncSession, session: Session, player: Player) -
         # Запускаем переход в ночь как фоновую задачу, чтобы HTTP-handler
         # acknowledge_role завершился моментально, а не держал соединение
         # до конца первой ночи (execute_night_sequence делает долгий await-loop).
-        asyncio.create_task(transition_to_night(session.id, 1))
+        asyncio.create_task(_enter_first_night_or_story(session.id))
     log_event(
         logger,
         logging.INFO,
@@ -658,6 +658,47 @@ async def acknowledge_role(db: AsyncSession, session: Session, player: Player) -
     )
 
     return {"acknowledged": True, "players_acknowledged": acked, "players_total": alive_total}
+
+
+async def _enter_first_night_or_story(session_id: uuid.UUID) -> None:
+    """Compatibility shim: запустить Story Engine, если включён флаг.
+
+    Вызывается вместо прямого ``transition_to_night(session_id, 1)`` после
+    role_reveal'а. Если ``session.story_id`` задан И
+    ``session.settings.use_story_engine`` true — gameplay идёт через
+    ``services.story_runtime``. Иначе — legacy ``transition_to_night``.
+
+    В этапе 7 этот shim удаляется вместе с legacy.
+    """
+    from core.database import async_session_factory
+
+    async with async_session_factory() as db:
+        session = await db.get(Session, session_id)
+        if session is None:
+            return
+        use_story_engine = bool(
+            session.story_id and (session.settings or {}).get("use_story_engine")
+        )
+
+    if use_story_engine:
+        # Локальный импорт: story_runtime может не существовать в legacy
+        # тестовых окружениях (миграция Story Engine не применена).
+        try:
+            from services.story_runtime import start_story
+        except ImportError:
+            log_event(
+                logger,
+                logging.ERROR,
+                "story_engine.import_failed",
+                "use_story_engine=true но services.story_runtime не импортируется — fallback на legacy",
+                session_id=str(session_id),
+            )
+            await transition_to_night(session_id, 1)
+            return
+        await start_story(session_id)
+        return
+
+    await transition_to_night(session_id, 1)
 
 
 async def transition_to_night(session_id: uuid.UUID, phase_number: int):
