@@ -464,3 +464,64 @@ $admin-warning: #d4a046;
     color: $admin-warning;
   }
 }
+
+// Простая таблица для admin страниц (AdminSessionsPage). Тонкие границы,
+// hover-подсветка, спец-цвет для row-abandoned.
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+
+  th,
+  td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid $admin-border;
+    vertical-align: top;
+  }
+
+  th {
+    color: $admin-text-muted;
+    font-weight: 500;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  tbody tr {
+    transition: background 0.12s ease;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    &.row-abandoned {
+      background: rgba(232, 138, 58, 0.06);
+
+      &:hover {
+        background: rgba(232, 138, 58, 0.1);
+      }
+    }
+  }
+
+  code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85em;
+    color: $admin-text;
+  }
+
+  select {
+    background: $admin-surface;
+    color: $admin-text;
+    border: 1px solid $admin-border-strong;
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 0.85rem;
+
+    &:focus {
+      outline: none;
+      border-color: rgba($admin-success, 0.6);
+    }
+  }
+}

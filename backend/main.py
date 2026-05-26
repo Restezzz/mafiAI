@@ -202,6 +202,11 @@ app.include_router(subscriptions_router, prefix="/api/subscriptions", tags=["sub
 app.include_router(stories_router, prefix="/api/stories", tags=["stories"])
 # /api/admin/users/* — управление is_admin флагами других юзеров. Гейт require_admin.
 app.include_router(admin_users_router, prefix="/api/admin", tags=["admin-users"])
+# /api/admin/sessions/* + /api/admin/cleanup/* — hygiene-роутер.
+# Регистрируется без изоляции: использует только базовые модели (Session,
+# User, Player, GamePhase), которые есть с самой первой миграции.
+from api.routers.admin_sessions import router as admin_sessions_router
+app.include_router(admin_sessions_router, prefix="/api/admin", tags=["admin-sessions"])
 # /api/admin/stories/* — Story Engine CRUD. Тот же изоляционный паттерн что и
 # admin_narrator: ошибка импорта (например ещё не накатили story_engine_tables
 # миграцию) логируется, но не валит uvicorn.

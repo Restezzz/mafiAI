@@ -52,9 +52,18 @@ const BackIcon = () => (
   </svg>
 );
 
+const SessionsIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <line x1="3" y1="10" x2="21" y2="10" />
+    <line x1="8" y1="4" x2="8" y2="20" />
+  </svg>
+);
+
 const NAV_ITEMS = [
   { to: '/admin', label: 'Обзор', icon: <HomeIcon />, end: true },
   { to: '/admin/stories', label: 'Сюжеты', icon: <StoriesIcon /> },
+  { to: '/admin/sessions', label: 'Сессии', icon: <SessionsIcon /> },
   { to: '/admin/triggers', label: 'Триггеры', icon: <TriggersIcon /> },
   { to: '/admin/audio', label: 'Аудиотека', icon: <AudioIcon /> },
   { to: '/admin/names', label: 'Имена игроков', icon: <NamesIcon /> },
