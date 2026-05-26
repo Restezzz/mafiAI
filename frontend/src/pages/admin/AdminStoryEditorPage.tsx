@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   adminStoriesApi,
   StoryReadFull,
   StoryStep,
+  StoryStepKind,
 } from '../../api/adminStoriesApi';
 import { logger } from '../../services/logger';
 import { parseApiError } from '../../utils/parseApiError';
@@ -21,6 +22,18 @@ import StoryGraphView from '../../components/admin/StoryGraphView';
  * этапе 4.2. Минимальные edit-возможности (rename step, edit transition
  * priority) — в этом же этапе через inline-формы.
  */
+const STEP_KINDS: StoryStepKind[] = [
+  'narration',
+  'role_action',
+  'discussion',
+  'voting',
+  'night_resolve',
+  'day_resolve',
+  'branch',
+  'pause',
+  'end',
+];
+
 export default function AdminStoryEditorPage() {
   const { storyId } = useParams<{ storyId: string }>();
   const navigate = useNavigate();
@@ -28,6 +41,24 @@ export default function AdminStoryEditorPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const [createStepOpen, setCreateStepOpen] = useState(false);
+  const [opError, setOpError] = useState<string>('');
+
+  // Рефактор fetch — можно передёргивать после CRUD-операций.
+  const fetchStory = useCallback(async () => {
+    if (!storyId) return;
+    try {
+      const res = await adminStoriesApi.get(storyId);
+      setStory(res.data);
+      setError('');
+    } catch (err) {
+      logger.warn('admin.story.load_failed', 'Failed to load story', {
+        error: parseApiError(err),
+        storyId,
+      });
+      setError(getApiErrorMessage(err) ?? 'Не удалось загрузить сюжет');
+    }
+  }, [storyId]);
 
   useEffect(() => {
     if (!storyId) {
@@ -36,28 +67,111 @@ export default function AdminStoryEditorPage() {
     }
     let cancelled = false;
     setLoading(true);
-    setError('');
-    adminStoriesApi
-      .get(storyId)
-      .then((res) => {
-        if (cancelled) return;
-        setStory(res.data);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        logger.warn('admin.story.load_failed', 'Failed to load story', {
-          error: parseApiError(err),
-          storyId,
-        });
-        setError(getApiErrorMessage(err) ?? 'Не удалось загрузить сюжет');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    fetchStory().finally(() => {
+      if (!cancelled) setLoading(false);
+    });
     return () => {
       cancelled = true;
     };
-  }, [storyId, navigate]);
+  }, [storyId, navigate, fetchStory]);
+
+  // ----- CRUD callbacks (этап 6.1) ------------------------------------
+  const handleCreateTransition = useCallback(
+    async (params: { fromStepId: string; toStepId: string }) => {
+      if (!storyId) return;
+      setOpError('');
+      try {
+        await adminStoriesApi.createTransition(storyId, {
+          from_step_id: params.fromStepId,
+          to_step_id: params.toStepId,
+          condition: null,
+          priority: 10,
+        });
+        await fetchStory();
+      } catch (err) {
+        const msg = getApiErrorMessage(err) ?? 'Не удалось создать переход';
+        setOpError(msg);
+        logger.warn('admin.story.create_transition_failed', msg, {
+          error: parseApiError(err),
+          storyId,
+          ...params,
+        });
+      }
+    },
+    [storyId, fetchStory],
+  );
+
+  const handleDeleteStep = useCallback(
+    async (stepId: string) => {
+      if (!storyId || !story) return;
+      const target = story.steps.find((s) => s.id === stepId);
+      const ok = window.confirm(
+        `Удалить шаг «${target?.slug ?? stepId}»? Все входящие/исходящие ` +
+          `переходы и cues будут удалены вместе с ним (cascade).`,
+      );
+      if (!ok) return;
+      setOpError('');
+      try {
+        await adminStoriesApi.deleteStep(storyId, stepId);
+        if (selectedStepId === stepId) setSelectedStepId(null);
+        await fetchStory();
+      } catch (err) {
+        const msg = getApiErrorMessage(err) ?? 'Не удалось удалить шаг';
+        setOpError(msg);
+        logger.warn('admin.story.delete_step_failed', msg, {
+          error: parseApiError(err),
+          storyId,
+          stepId,
+        });
+      }
+    },
+    [storyId, story, fetchStory, selectedStepId],
+  );
+
+  const handleDeleteTransition = useCallback(
+    async (transitionId: string) => {
+      if (!storyId) return;
+      setOpError('');
+      try {
+        await adminStoriesApi.deleteTransition(storyId, transitionId);
+        await fetchStory();
+      } catch (err) {
+        const msg = getApiErrorMessage(err) ?? 'Не удалось удалить переход';
+        setOpError(msg);
+        logger.warn('admin.story.delete_transition_failed', msg, {
+          error: parseApiError(err),
+          storyId,
+          transitionId,
+        });
+      }
+    },
+    [storyId, fetchStory],
+  );
+
+  const handleCreateStep = useCallback(
+    async (form: { slug: string; kind: StoryStepKind; label: string }) => {
+      if (!storyId) return;
+      setOpError('');
+      try {
+        await adminStoriesApi.createStep(storyId, {
+          slug: form.slug,
+          kind: form.kind,
+          label: form.label,
+        });
+        setCreateStepOpen(false);
+        await fetchStory();
+      } catch (err) {
+        const msg = getApiErrorMessage(err) ?? 'Не удалось создать шаг';
+        setOpError(msg);
+        logger.warn('admin.story.create_step_failed', msg, {
+          error: parseApiError(err),
+          storyId,
+          ...form,
+        });
+      }
+    },
+    [storyId, fetchStory],
+  );
 
   if (loading) {
     return (
@@ -285,13 +399,36 @@ export default function AdminStoryEditorPage() {
         </div>
 
         <div className="admin-card">
-          <h3 style={{ marginTop: 0, marginBottom: 8 }}>Visual graph</h3>
+          <div style={{
+            display: 'flex', justifyContent: 'space-between',
+            alignItems: 'center', marginBottom: 8,
+          }}>
+            <h3 style={{ margin: 0 }}>Visual graph</h3>
+            <button
+              type="button"
+              className="admin-btn"
+              onClick={() => { setOpError(''); setCreateStepOpen(true); }}
+            >
+              + Новый шаг
+            </button>
+          </div>
           <p className="admin-row__hint" style={{ marginTop: 0 }}>
             Перетаскивайте узлы — позиция сохранится автоматически.
-            Создание шагов / переходов / редактирование cues — пока через API
-            или Import/Export. Клик по ноде — выделение синхронно с таблицей шагов выше.
+            Тяните от правого хэндла к левому, чтобы создать переход (priority=10, без condition).
+            Выберите узел/edge и нажмите Delete, чтобы удалить (cascade на cues и связи).
           </p>
-          <StoryGraphView story={story} onSelectStep={setSelectedStepId} />
+          {opError && (
+            <div className="admin-error-banner" style={{ marginBottom: 8 }}>
+              {opError}
+            </div>
+          )}
+          <StoryGraphView
+            story={story}
+            onSelectStep={setSelectedStepId}
+            onConnectEdge={handleCreateTransition}
+            onDeleteStep={handleDeleteStep}
+            onDeleteEdge={handleDeleteTransition}
+          />
           {selectedStepId && (() => {
             const sel = stepByIdMap.get(selectedStepId);
             if (!sel) return null;
@@ -319,6 +456,132 @@ export default function AdminStoryEditorPage() {
           })()}
         </div>
       </div>
+
+      {createStepOpen && (
+        <CreateStepModal
+          onClose={() => setCreateStepOpen(false)}
+          onSubmit={handleCreateStep}
+          existingSlugs={new Set(story.steps.map((s) => s.slug))}
+        />
+      )}
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Модальное окно создания шага.
+// ---------------------------------------------------------------------------
+function CreateStepModal({
+  onClose,
+  onSubmit,
+  existingSlugs,
+}: {
+  onClose: () => void;
+  onSubmit: (form: { slug: string; kind: StoryStepKind; label: string }) => void;
+  existingSlugs: Set<string>;
+}) {
+  const [slug, setSlug] = useState('');
+  const [kind, setKind] = useState<StoryStepKind>('narration');
+  const [label, setLabel] = useState('');
+  const slugError = !slug
+    ? 'Slug обязателен'
+    : !/^[a-z0-9_]{1,80}$/.test(slug)
+      ? 'Slug: только [a-z0-9_], до 80 символов'
+      : existingSlugs.has(slug)
+        ? 'Slug уже используется в этом сюжете'
+        : '';
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0, 0, 0, 0.6)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 1000,
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: '#1a1d22', border: '1px solid #2a2d33',
+          borderRadius: 8, padding: 16, minWidth: 360, maxWidth: 480,
+          color: '#c0c2c8',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 style={{ marginTop: 0, marginBottom: 12 }}>Новый шаг</h3>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (slugError) return;
+            onSubmit({ slug, kind, label });
+          }}
+          style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
+        >
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 12, opacity: 0.7 }}>Slug</span>
+            <input
+              type="text"
+              value={slug}
+              onChange={(e) => setSlug(e.target.value)}
+              autoFocus
+              placeholder="my_step_slug"
+              style={{
+                padding: '6px 8px', background: '#0a0b0e',
+                border: '1px solid #2a2d33', borderRadius: 4,
+                color: '#e8e9eb', fontFamily: 'monospace', fontSize: 13,
+              }}
+            />
+            {slugError && slug.length > 0 && (
+              <span style={{ fontSize: 11, color: '#e85a5a' }}>{slugError}</span>
+            )}
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 12, opacity: 0.7 }}>Kind</span>
+            <select
+              value={kind}
+              onChange={(e) => setKind(e.target.value as StoryStepKind)}
+              style={{
+                padding: '6px 8px', background: '#0a0b0e',
+                border: '1px solid #2a2d33', borderRadius: 4,
+                color: '#e8e9eb', fontSize: 13,
+              }}
+            >
+              {STEP_KINDS.map((k) => (
+                <option key={k} value={k}>{k}</option>
+              ))}
+            </select>
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 12, opacity: 0.7 }}>Label (опц.)</span>
+            <input
+              type="text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="Человекочитаемое название"
+              style={{
+                padding: '6px 8px', background: '#0a0b0e',
+                border: '1px solid #2a2d33', borderRadius: 4,
+                color: '#e8e9eb', fontSize: 13,
+              }}
+            />
+          </label>
+          <div style={{
+            display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4,
+          }}>
+            <button type="button" onClick={onClose} className="admin-btn">
+              Отмена
+            </button>
+            <button
+              type="submit"
+              disabled={Boolean(slugError)}
+              className="admin-btn admin-btn--primary"
+              style={{ opacity: slugError ? 0.5 : 1 }}
+            >
+              Создать
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }

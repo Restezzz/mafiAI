@@ -32,6 +32,7 @@ import {
   type Edge,
   type NodeProps,
   type NodeChange,
+  type Connection,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
@@ -169,9 +170,22 @@ interface Props {
   onSelectStep?: (stepId: string | null) => void;
   /** Можно ли таскать ноды (требует admin прав; backend всё равно проверит). */
   editable?: boolean;
+  /** Создать transition (drag connect handle). null — disable connect. */
+  onConnectEdge?: (params: { fromStepId: string; toStepId: string }) => void;
+  /** Delete клавиша по выделенной ноде (UUID step). */
+  onDeleteStep?: (stepId: string) => void;
+  /** Delete клавиша по выделенному edge (UUID transition). */
+  onDeleteEdge?: (transitionId: string) => void;
 }
 
-export default function StoryGraphView({ story, onSelectStep, editable = true }: Props) {
+export default function StoryGraphView({
+  story,
+  onSelectStep,
+  editable = true,
+  onConnectEdge,
+  onDeleteStep,
+  onDeleteEdge,
+}: Props) {
   // Считаем initial-позиции один раз. Изменение story → пересчёт через key.
   const initialNodes = useMemo<Node<StoryNodeData>[]>(() => {
     const allZero = story.steps.every(
@@ -297,6 +311,33 @@ export default function StoryGraphView({ story, onSelectStep, editable = true }:
     onSelectStep?.(null);
   }, [onSelectStep]);
 
+  // Создание transition перетаскиванием из source-handle в target-handle.
+  // xyflow сам не добавляет edge — это обязанность колбэка.
+  const handleConnect = useCallback(
+    (conn: Connection) => {
+      if (!conn.source || !conn.target) return;
+      if (conn.source === conn.target) return; // self-loops запрещены
+      onConnectEdge?.({ fromStepId: conn.source, toStepId: conn.target });
+    },
+    [onConnectEdge],
+  );
+
+  const handleNodesDelete = useCallback(
+    (deleted: Node<StoryNodeData>[]) => {
+      if (!onDeleteStep) return;
+      for (const n of deleted) onDeleteStep(n.id);
+    },
+    [onDeleteStep],
+  );
+
+  const handleEdgesDelete = useCallback(
+    (deleted: Edge[]) => {
+      if (!onDeleteEdge) return;
+      for (const e of deleted) onDeleteEdge(e.id);
+    },
+    [onDeleteEdge],
+  );
+
   // Cleanup таймеров при размонтировании.
   useEffect(() => {
     const timers = saveTimersRef.current;
@@ -315,11 +356,15 @@ export default function StoryGraphView({ story, onSelectStep, editable = true }:
         onEdgesChange={onEdgesChange}
         onNodeClick={handleNodeClick}
         onPaneClick={handlePaneClick}
+        onConnect={handleConnect}
+        onNodesDelete={handleNodesDelete}
+        onEdgesDelete={handleEdgesDelete}
         nodeTypes={NODE_TYPES}
         fitView
         nodesDraggable={editable}
-        nodesConnectable={false}
+        nodesConnectable={editable && Boolean(onConnectEdge)}
         elementsSelectable
+        deleteKeyCode={editable ? ['Backspace', 'Delete'] : null}
         proOptions={{ hideAttribution: true }}
       >
         <Background color="#2a2d33" gap={16} />
