@@ -33,6 +33,12 @@ const UsersIcon = () => (
     <path d="M16 3.13a4 4 0 0 1 0 7.75" />
   </svg>
 );
+const StoriesIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+    <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+  </svg>
+);
 const HomeIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
@@ -48,6 +54,7 @@ const BackIcon = () => (
 
 const NAV_ITEMS = [
   { to: '/admin', label: 'Обзор', icon: <HomeIcon />, end: true },
+  { to: '/admin/stories', label: 'Сюжеты', icon: <StoriesIcon /> },
   { to: '/admin/triggers', label: 'Триггеры', icon: <TriggersIcon /> },
   { to: '/admin/audio', label: 'Аудиотека', icon: <AudioIcon /> },
   { to: '/admin/names', label: 'Имена игроков', icon: <NamesIcon /> },

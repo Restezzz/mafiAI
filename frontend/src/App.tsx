@@ -33,6 +33,8 @@ const TriggerCreatePage = lazy(() => import('./pages/admin/TriggerCreatePage'));
 const AudioLibraryPage = lazy(() => import('./pages/admin/AudioLibraryPage'));
 const NameAssetsPage = lazy(() => import('./pages/admin/NameAssetsPage'));
 const AdminUsersPage = lazy(() => import('./pages/admin/AdminUsersPage'));
+const AdminStoriesListPage = lazy(() => import('./pages/admin/AdminStoriesListPage'));
+const AdminStoryEditorPage = lazy(() => import('./pages/admin/AdminStoryEditorPage'));
 
 // Dev-only UI showcase page. В production-build lazy-импорт dead-code-elim-ится
 // благодаря NODE_ENV-гварду (Terser). `process.env.NODE_ENV` — единственный
@@ -122,6 +124,8 @@ const router = createBrowserRouter([
       { path: 'audio', element: withSuspense(<AudioLibraryPage />) },
       { path: 'names', element: withSuspense(<NameAssetsPage />) },
       { path: 'users', element: withSuspense(<AdminUsersPage />) },
+      { path: 'stories', element: withSuspense(<AdminStoriesListPage />) },
+      { path: 'stories/:storyId', element: withSuspense(<AdminStoryEditorPage />) },
     ],
   },
   ...devRoutes,
