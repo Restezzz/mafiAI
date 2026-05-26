@@ -14,6 +14,9 @@ import StoryGraphView from '../../components/admin/StoryGraphView';
 import ConditionEditor, {
   Condition,
 } from '../../components/admin/ConditionEditor';
+import CueListEditor from '../../components/admin/CueListEditor';
+import { adminNarratorApi } from '../../api/adminNarratorApi';
+import { Trigger } from '../../types/narrator';
 
 
 /**
@@ -47,6 +50,7 @@ export default function AdminStoryEditorPage() {
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [createStepOpen, setCreateStepOpen] = useState(false);
   const [opError, setOpError] = useState<string>('');
+  const [triggers, setTriggers] = useState<Trigger[]>([]);
 
   // Рефактор fetch — можно передёргивать после CRUD-операций.
   const fetchStory = useCallback(async () => {
@@ -78,6 +82,21 @@ export default function AdminStoryEditorPage() {
       cancelled = true;
     };
   }, [storyId, navigate, fetchStory]);
+
+  // Подгружаем триггеры один раз — используются в CueListEditor
+  // для selector'а при создании/редактировании cues. Если в сюжете нет
+  // narration-шагов — запрос всё равно делается, просто игнорируется.
+  useEffect(() => {
+    let cancelled = false;
+    adminNarratorApi.listTriggers().then((res) => {
+      if (cancelled) return;
+      setTriggers(res.data.triggers);
+    }).catch((err) => {
+      logger.warn('admin.story.triggers_load_failed',
+        'Failed to load triggers for cue editor', { error: parseApiError(err) });
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   // ----- CRUD callbacks (этап 6.1) ------------------------------------
   const handleCreateTransition = useCallback(
@@ -350,26 +369,14 @@ export default function AdminStoryEditorPage() {
                     </pre>
                   </details>
                 )}
-                {step.cues.length > 0 && (
-                  <details style={{ marginTop: 6 }}>
-                    <summary className="admin-row__hint" style={{ cursor: 'pointer' }}>
-                      Фразы ({step.cues.length})
-                    </summary>
-                    <ol style={{ margin: '4px 0 0 16px', padding: 0, fontSize: 12 }}>
-                      {step.cues.map((cue) => (
-                        <li key={cue.id} style={{ marginTop: 2 }}>
-                          {cue.trigger_slug ? (
-                            <code>{cue.trigger_slug}</code>
-                          ) : (
-                            <em>{cue.override_text ?? '(пустая)'}</em>
-                          )}
-                          {cue.override_text && cue.trigger_slug && (
-                            <span className="admin-row__hint"> — override: {cue.override_text}</span>
-                          )}
-                        </li>
-                      ))}
-                    </ol>
-                  </details>
+                {step.kind === 'narration' && (
+                  <CueListEditor
+                    storyId={story.id}
+                    stepId={step.id}
+                    cues={step.cues}
+                    triggers={triggers}
+                    onRefetch={fetchStory}
+                  />
                 )}
               </div>
             ))}
