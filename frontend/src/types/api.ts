@@ -122,6 +122,9 @@ export interface UpdateSettingsRequest {
   voting_timer_seconds?: number;
   night_action_timer_seconds?: number;
   role_config?: Partial<RoleConfig>;
+  // Story Engine (этап 2.6).
+  use_story_engine?: boolean;
+  story_id?: string | null;
 }
 
 export interface UpdateSettingsResponse {

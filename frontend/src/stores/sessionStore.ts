@@ -178,6 +178,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (rc.maniac !== undefined) filtered.maniac = rc.maniac;
       payload.role_config = filtered;
     }
+    if (newSettings.use_story_engine !== undefined) {
+      payload.use_story_engine = newSettings.use_story_engine;
+    }
+    if (newSettings.story_id !== undefined) {
+      payload.story_id = newSettings.story_id;
+    }
     const response = await sessionApi.updateSettings(state.session.id, payload);
     const updated = response.data?.settings as SessionSettings | undefined;
     if (updated) {

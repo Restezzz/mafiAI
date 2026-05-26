@@ -182,6 +182,7 @@ from api.routers.game import router as game_router
 from api.routers.logs import router as logs_router
 from api.routers.observability import router as observability_router
 from api.routers.subscriptions import router as subscriptions_router
+from api.routers.stories import router as stories_router
 from api.routers.dev import router as dev_router
 from api.routers.admin_users import router as admin_users_router
 from api.websockets.ws import router as ws_router
@@ -193,6 +194,12 @@ app.include_router(game_router, prefix="/api/sessions", tags=["game"])
 app.include_router(logs_router, prefix="/api/logs", tags=["logs"])
 app.include_router(observability_router, prefix="/api/observability", tags=["observability"])
 app.include_router(subscriptions_router, prefix="/api/subscriptions", tags=["subscriptions"])
+# /api/stories — публичный список активных сюжетов для lobby UI (этап 2.6).
+# Изоляция по тому же паттерну что admin_stories: импорт делает SELECT при
+# первом запросе, поэтому если миграция Story Engine не применена, упадёт
+# не на startup а только при первом обращении (которое до миграций не
+# случится).
+app.include_router(stories_router, prefix="/api/stories", tags=["stories"])
 # /api/admin/users/* — управление is_admin флагами других юзеров. Гейт require_admin.
 app.include_router(admin_users_router, prefix="/api/admin", tags=["admin-users"])
 # /api/admin/stories/* — Story Engine CRUD. Тот же изоляционный паттерн что и

@@ -113,6 +113,11 @@ export interface SessionSettings {
   night_action_timer_seconds: number;
   role_config: RoleConfig;
   dev_test_lobby?: boolean;
+  // Story Engine (этап 2.6): включён ли альтернативный gameplay flow.
+  // story_id хранится отдельной FK-колонкой sessions.story_id, но
+  // прокидывается через тот же settings-form для удобства UI.
+  use_story_engine?: boolean;
+  story_id?: string | null;
 }
 
 export interface DevLobbyPlayerLink {

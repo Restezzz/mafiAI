@@ -237,12 +237,10 @@ export default function LobbyPage() {
     }
   };
 
-  const handleTimerChange = async (partial: Partial<{
-    discussion_timer_seconds: number;
-    voting_timer_seconds: number;
-    night_action_timer_seconds: number;
-    role_reveal_timer_seconds: number;
-  }>) => {
+  // Принимает любой подмножественный patch SessionSettings — таймеры
+  // плюс Story Engine поля (use_story_engine, story_id). Имя сохранено
+  // ради обратной совместимости (SessionSettingsForm prop onChangeTimers).
+  const handleTimerChange = async (partial: Partial<import('../types/game').SessionSettings>) => {
     try {
       setSettingsError(null);
       await setSettings(partial);
