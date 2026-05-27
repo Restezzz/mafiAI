@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useCountdown } from '../../hooks/useCountdown';
@@ -36,6 +36,14 @@ export default function DayVotingScreen() {
     timerStartedAt: phase?.timer_started_at,
     resetKey: phase?.id ?? 'voting',
   });
+
+  // Сбрасываем локальный selectedTarget при смене раунда голосования
+  // (revote): timer_started_at меняется при transition_to_voting(round_number=2),
+  // поэтому подвязываемся именно к нему. Без сброса карточка из round 1 могла
+  // остаться визуально selected, что путает игрока в переголосовании.
+  useEffect(() => {
+    setSelectedTarget(null);
+  }, [phase?.timer_started_at]);
 
   const isBlocked = myPlayerId === dayBlockedPlayer;
   const canVote = myStatus === 'alive' && !isBlocked && !voteSubmitted;

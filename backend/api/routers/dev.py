@@ -44,18 +44,21 @@ logger = logging.getLogger(__name__)
 
 
 def _build_me_response_for_dev_player(user: User) -> MeResponse:
-    """Сборка MeResponse для активированного dev-игрока.
+    """Собирает MeResponse для активированного dev-игрока.
 
-    Вынесено в отдельную функцию, чтобы регрессия `is_admin`/`avatar_url`
-    обязательных полей MeResponse была покрыта тестом без поднятия всего
-    FastAPI-приложения. При расширении MeResponse — следить и здесь.
+    Выделено в helper, чтобы при добавлении нового обязательного поля в
+    MeResponse (например, is_admin был добавлен после первой версии активации)
+    /dev/test-lobbies/activate не падал тихо ResponseValidationError'ом —
+    Pydantic-исключение через BaseHTTPMiddleware + CORSMiddleware приходит
+    к браузеру оборванным соединением, axios репортит ERR_NETWORK, и фронт
+    пишет «Нет связи с сервером», что крайне сложно дебажить.
     """
     return MeResponse(
         user_id=str(user.id),
         email=user.email,
         nickname=user.display_name,
         has_pro=False,
-        is_admin=user.is_admin,
+        is_admin=bool(user.is_admin),
         created_at=user.created_at.isoformat() if user.created_at else "",
         avatar_url=user.avatar_url,
     )
