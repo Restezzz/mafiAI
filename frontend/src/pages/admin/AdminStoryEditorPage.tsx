@@ -16,6 +16,8 @@ import ConditionEditor, {
 } from '../../components/admin/ConditionEditor';
 import CueListEditor from '../../components/admin/CueListEditor';
 import StepPayloadEditor from '../../components/admin/StepPayloadEditor';
+import StorySettingsForm from '../../components/admin/StorySettingsForm';
+import StoryEntryPointer from '../../components/admin/StoryEntryPointer';
 import { adminNarratorApi } from '../../api/adminNarratorApi';
 import { Trigger } from '../../types/narrator';
 
@@ -84,20 +86,29 @@ export default function AdminStoryEditorPage() {
     };
   }, [storyId, navigate, fetchStory]);
 
-  // Подгружаем триггеры один раз — используются в CueListEditor
-  // для selector'а при создании/редактировании cues. Если в сюжете нет
-  // narration-шагов — запрос всё равно делается, просто игнорируется.
-  useEffect(() => {
-    let cancelled = false;
-    adminNarratorApi.listTriggers().then((res) => {
-      if (cancelled) return;
+  // Подгружаем триггеры для CueListEditor с учётом scope (этап 6.6).
+  // - story.use_only_own_triggers=true → только story-scoped (?story_id=X)
+  // - иначе → story-scoped + global (?story_id=X&include_global=true)
+  // Перезагружаются автоматически если меняется флаг (после сохранения
+  // настроек fetchStory подтягивает свежий story, эффект ниже видит
+  // новое значение и шлёт повторный запрос).
+  const reloadTriggers = useCallback(async () => {
+    if (!story) return;
+    try {
+      const res = await adminNarratorApi.listTriggers({
+        story_id: story.id,
+        include_global: !story.use_only_own_triggers,
+      });
       setTriggers(res.data.triggers);
-    }).catch((err) => {
+    } catch (err) {
       logger.warn('admin.story.triggers_load_failed',
         'Failed to load triggers for cue editor', { error: parseApiError(err) });
-    });
-    return () => { cancelled = true; };
-  }, []);
+    }
+  }, [story]);
+
+  useEffect(() => {
+    void reloadTriggers();
+  }, [reloadTriggers]);
 
   // ----- CRUD callbacks (этап 6.1) ------------------------------------
   const handleCreateTransition = useCallback(
@@ -242,13 +253,10 @@ export default function AdminStoryEditorPage() {
     );
   }
 
-  const stepBySlugMap = new Map<string, StoryStep>();
   const stepByIdMap = new Map<string, StoryStep>();
   for (const s of story.steps) {
-    stepBySlugMap.set(s.slug, s);
     stepByIdMap.set(s.id, s);
   }
-  const entryStep = story.entry_step_id ? stepByIdMap.get(story.entry_step_id) : null;
 
   return (
     <>
@@ -289,44 +297,20 @@ export default function AdminStoryEditorPage() {
         )}
 
         {/* Settings */}
-        {story.settings && (
-          <div className="admin-card">
-            <h3 style={{ marginTop: 0, marginBottom: 12 }}>Настройки</h3>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <tbody>
-                <tr>
-                  <td style={{ padding: '4px 8px', opacity: 0.7 }}>Пауза между фразами (сек)</td>
-                  <td style={{ padding: '4px 8px' }}>{story.settings.inter_cue_pause_seconds}</td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '4px 8px', opacity: 0.7 }}>Множитель таймеров</td>
-                  <td style={{ padding: '4px 8px' }}>{story.settings.timer_multiplier_default}</td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '4px 8px', opacity: 0.7 }}>Karaoke</td>
-                  <td style={{ padding: '4px 8px' }}>
-                    {story.settings.karaoke_enabled ? 'Включено' : 'Выключено'}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        )}
+        <StorySettingsForm
+          storyId={story.id}
+          settings={story.settings}
+          useOnlyOwnTriggers={story.use_only_own_triggers}
+          onSaved={fetchStory}
+        />
 
         {/* Entry */}
-        <div className="admin-card">
-          <h3 style={{ marginTop: 0, marginBottom: 8 }}>Точка входа</h3>
-          {entryStep ? (
-            <div>
-              <code>{entryStep.slug}</code> — {entryStep.label} (
-              <span className="admin-row__hint">{entryStep.kind}</span>)
-            </div>
-          ) : (
-            <div className="admin-row__hint">
-              Не задана. Сюжет нельзя запустить.
-            </div>
-          )}
-        </div>
+        <StoryEntryPointer
+          storyId={story.id}
+          entryStepId={story.entry_step_id}
+          steps={story.steps}
+          onSaved={fetchStory}
+        />
 
         {/* Steps */}
         <div className="admin-card">

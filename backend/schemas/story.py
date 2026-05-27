@@ -346,6 +346,7 @@ class StoryListItem(BaseModel):
     description: str | None
     is_active: bool
     is_obsolete: bool
+    use_only_own_triggers: bool = False
     superseded_by_id: str | None
     created_at: datetime
     updated_at: datetime
@@ -369,6 +370,7 @@ class StoryReadFull(BaseModel):
     description: str | None
     is_active: bool
     is_obsolete: bool
+    use_only_own_triggers: bool = False
     superseded_by_id: str | None
     entry_step_id: str | None
     created_at: datetime
@@ -408,6 +410,8 @@ class StoryUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=4000)
     is_active: bool | None = None
     is_obsolete: bool | None = None
+    # Этап 6.6: изоляция от global-namespace триггеров. None = не менять.
+    use_only_own_triggers: bool | None = None
     entry_step_id: UUID | None = None
 
 

@@ -66,6 +66,11 @@ export interface StoryListItem {
   description: string | null;
   is_active: boolean;
   is_obsolete: boolean;
+  /**
+   * Этап 6.6: если true — CueListEditor показывает только
+   * triggers этого сюжета (без global namespace).
+   */
+  use_only_own_triggers: boolean;
   superseded_by_id: string | null;
   created_at: string;
   updated_at: string;
@@ -85,6 +90,11 @@ export interface StoryReadFull {
   description: string | null;
   is_active: boolean;
   is_obsolete: boolean;
+  /**
+   * Этап 6.6: если true — CueListEditor показывает только
+   * triggers этого сюжета (без global namespace).
+   */
+  use_only_own_triggers: boolean;
   superseded_by_id: string | null;
   entry_step_id: string | null;
   created_at: string;
@@ -110,6 +120,7 @@ export interface StoryUpdatePayload {
   description?: string;
   is_active?: boolean;
   is_obsolete?: boolean;
+  use_only_own_triggers?: boolean;
   entry_step_id?: string;
 }
 

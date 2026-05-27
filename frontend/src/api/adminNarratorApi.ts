@@ -7,6 +7,7 @@ import {
   CompositeTemplate,
   CompositeTemplateCreatePayload,
   CompositeTemplateUpdatePayload,
+  ListTriggersParams,
   NameAsset,
   NameAssetUpdatePayload,
   PlaceholderInfo,
@@ -23,7 +24,16 @@ const BASE = '/admin/narrator';
 
 export const adminNarratorApi = {
   // --- Triggers ---
-  listTriggers: () => httpClient.get<{ triggers: Trigger[] }>(`${BASE}/triggers`),
+  listTriggers: (params?: ListTriggersParams) =>
+    httpClient.get<{ triggers: Trigger[] }>(`${BASE}/triggers`, {
+      params: {
+        story_id: params?.story_id,
+        // axios скипает undefined, но false-параметры передаёт как 'false' —
+        // явно конвертируем в строку 'true', а если false/undefined — не
+        // включаем в querystring совсем (default backend = false).
+        ...(params?.include_global ? { include_global: 'true' } : {}),
+      },
+    }),
   getTrigger: (id: string) => httpClient.get<Trigger>(`${BASE}/triggers/${id}`),
   createTrigger: (payload: TriggerCreatePayload) =>
     httpClient.post<Trigger>(`${BASE}/triggers`, payload),

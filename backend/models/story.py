@@ -98,6 +98,13 @@ class Story(Base):
     is_obsolete: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false"
     )
+    # Если True — CueListEditor предлагает в dropdown триггеров ТОЛЬКО
+    # триггеры со story_id=this_story.id. Если False — добавляются ещё и
+    # global (story_id IS NULL). Default=False для обратной совместимости:
+    # старые сюжеты продолжают видеть весь global namespace.
+    use_only_own_triggers: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
     superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("stories.id", ondelete="SET NULL"),

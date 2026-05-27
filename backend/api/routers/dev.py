@@ -43,6 +43,24 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _build_me_response_for_dev_player(user: User) -> MeResponse:
+    """Сборка MeResponse для активированного dev-игрока.
+
+    Вынесено в отдельную функцию, чтобы регрессия `is_admin`/`avatar_url`
+    обязательных полей MeResponse была покрыта тестом без поднятия всего
+    FastAPI-приложения. При расширении MeResponse — следить и здесь.
+    """
+    return MeResponse(
+        user_id=str(user.id),
+        email=user.email,
+        nickname=user.display_name,
+        has_pro=False,
+        is_admin=user.is_admin,
+        created_at=user.created_at.isoformat() if user.created_at else "",
+        avatar_url=user.avatar_url,
+    )
+
+
 def _default_test_lobby_settings(player_count: int) -> dict:
     role_config = {
         "mafia": 1,
@@ -329,11 +347,5 @@ async def activate_test_lobby_player(
     return ActivateDevPlayerResponse(
         access_token=access_token,
         refresh_token=refresh_token,
-        user=MeResponse(
-            user_id=str(user.id),
-            email=user.email,
-            nickname=user.display_name,
-            has_pro=False,
-            created_at=user.created_at.isoformat() if user.created_at else "",
-        ),
+        user=_build_me_response_for_dev_player(user),
     )

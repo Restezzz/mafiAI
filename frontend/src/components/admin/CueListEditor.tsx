@@ -19,15 +19,36 @@
  * runtime пропустит её, но валидация на backend это разрешает (для
  * гибкости). Подсветим как warning жёлтым.
  */
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   adminStoriesApi,
   StoryNarrationCue,
 } from '../../api/adminStoriesApi';
-import { Trigger } from '../../types/narrator';
+import { Trigger, Variant } from '../../types/narrator';
 import { logger } from '../../services/logger';
 import { parseApiError } from '../../utils/parseApiError';
 import { getApiErrorMessage } from '../../utils/getApiErrorMessage';
+import InlineTriggerCreator from './InlineTriggerCreator';
+
+/** Сводка аудиозаписей у триггера: общее число вариантов и сколько с mp3. */
+interface AudioSummary {
+  total: number;
+  withAudio: number;
+  variants: Variant[];
+}
+
+function summarizeTrigger(trigger: Trigger | undefined): AudioSummary {
+  if (!trigger || trigger.kind !== 'variant') {
+    return { total: 0, withAudio: 0, variants: [] };
+  }
+  const withAudio = trigger.variants.filter((v) => Boolean(v.audio_file_id)).length;
+  return {
+    total: trigger.variants.length,
+    withAudio,
+    variants: trigger.variants,
+  };
+}
 
 interface Props {
   storyId: string;
@@ -35,10 +56,16 @@ interface Props {
   cues: StoryNarrationCue[];
   triggers: Trigger[];
   onRefetch: () => Promise<void> | void;
+  /**
+   * Этап 6.6: перезаливает только список triggers (без всего
+   * сюжета). Вызывается после inline-создания нового триггера,
+   * чтобы dropdown в CueForm увидел свежесозданный.
+   */
+  onTriggersReload?: () => Promise<void> | void;
 }
 
 export default function CueListEditor({
-  storyId, stepId, cues, triggers, onRefetch,
+  storyId, stepId, cues, triggers, onRefetch, onTriggersReload,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -46,6 +73,11 @@ export default function CueListEditor({
   const [busy, setBusy] = useState(false);
 
   const sorted = [...cues].sort((a, b) => a.sort_order - b.sort_order);
+  const triggerById = useMemo(() => {
+    const m = new Map<string, Trigger>();
+    for (const t of triggers) m.set(t.id, t);
+    return m;
+  }, [triggers]);
 
   const handleSwap = async (idxA: number, idxB: number) => {
     if (idxA < 0 || idxB < 0 || idxA >= sorted.length || idxB >= sorted.length) return;
@@ -118,6 +150,7 @@ export default function CueListEditor({
           <CueForm
             key={cue.id}
             triggers={triggers}
+            triggerById={triggerById}
             initial={cue}
             onCancel={() => setEditingId(null)}
             onSubmit={async (form) => {
@@ -153,6 +186,7 @@ export default function CueListEditor({
             isFirst={idx === 0}
             isLast={idx === sorted.length - 1}
             disabled={busy}
+            audio={cue.trigger_id ? summarizeTrigger(triggerById.get(cue.trigger_id)) : null}
             onUp={() => handleSwap(idx, idx - 1)}
             onDown={() => handleSwap(idx, idx + 1)}
             onEdit={() => setEditingId(cue.id)}
@@ -164,6 +198,7 @@ export default function CueListEditor({
       {adding ? (
         <CueForm
           triggers={triggers}
+          triggerById={triggerById}
           initial={null}
           onCancel={() => setAdding(false)}
           onSubmit={async (form) => {
@@ -216,7 +251,7 @@ export default function CueListEditor({
 // Строка cue в режиме просмотра.
 // ---------------------------------------------------------------------------
 function CueRow({
-  cue, idx, isFirst, isLast, disabled,
+  cue, idx, isFirst, isLast, disabled, audio,
   onUp, onDown, onEdit, onDelete,
 }: {
   cue: StoryNarrationCue;
@@ -224,6 +259,7 @@ function CueRow({
   isFirst: boolean;
   isLast: boolean;
   disabled: boolean;
+  audio: AudioSummary | null;
   onUp: () => void;
   onDown: () => void;
   onEdit: () => void;
@@ -232,6 +268,8 @@ function CueRow({
   const hasTrigger = Boolean(cue.trigger_id);
   const hasText = Boolean(cue.override_text);
   const isWarning = !hasTrigger && !hasText;
+  // Триггер выбран, но ни одной озвучки не привязано — отдельный warning.
+  const triggerNoAudio = hasTrigger && audio !== null && audio.withAudio === 0;
   return (
     <div style={{
       padding: '4px 6px',
@@ -247,9 +285,36 @@ function CueRow({
       <span style={{ opacity: 0.5, fontSize: 10, minWidth: 22 }}>#{idx}</span>
       <div style={{ flex: 1, overflow: 'hidden' }}>
         {hasTrigger ? (
-          <code style={{ color: '#a4c8e8' }}>
-            {cue.trigger_slug ?? cue.trigger_id}
-          </code>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <code style={{ color: '#a4c8e8' }}>
+              {cue.trigger_slug ?? cue.trigger_id}
+            </code>
+            {audio !== null && (
+              audio.withAudio > 0 ? (
+                <span
+                  title={`У триггера ${audio.withAudio}/${audio.total} вариантов с озвучкой`}
+                  style={{
+                    fontSize: 10, padding: '0 5px', borderRadius: 8,
+                    background: '#1a3a22', color: '#a4e8b8',
+                    border: '1px solid #2a5a33',
+                  }}
+                >
+                  🔊 {audio.withAudio}
+                </span>
+              ) : (
+                <span
+                  title="У триггера нет вариантов с mp3 — будет только typewriter без озвучки"
+                  style={{
+                    fontSize: 10, padding: '0 5px', borderRadius: 8,
+                    background: '#3a1a1a', color: '#e8a4a4',
+                    border: '1px solid #5a2a2a',
+                  }}
+                >
+                  🔇 нет mp3
+                </span>
+              )
+            )}
+          </span>
         ) : hasText ? (
           <span style={{
             fontStyle: 'italic', color: '#5fa05f',
@@ -272,6 +337,21 @@ function CueRow({
           </span>
         )}
       </div>
+      {triggerNoAudio && (
+        <Link
+          to={`/admin/triggers/${cue.trigger_id}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Открыть админку триггера для загрузки mp3"
+          style={{
+            fontSize: 10, padding: '2px 6px', borderRadius: 3,
+            background: '#3a1a1a', color: '#e8a4a4',
+            border: '1px solid #5a2a2a', textDecoration: 'none',
+          }}
+        >
+          + mp3
+        </Link>
+      )}
       <button
         type="button"
         onClick={onUp}
@@ -330,9 +410,10 @@ interface CueFormValues {
 }
 
 function CueForm({
-  triggers, initial, onSubmit, onCancel,
+  triggers, triggerById, initial, onSubmit, onCancel,
 }: {
   triggers: Trigger[];
+  triggerById: Map<string, Trigger>;
   initial: StoryNarrationCue | null;
   onSubmit: (form: CueFormValues) => Promise<void> | void;
   onCancel: () => void;
@@ -349,6 +430,7 @@ function CueForm({
   const [submitting, setSubmitting] = useState(false);
 
   const sortedTriggers = [...triggers].sort((a, b) => a.slug.localeCompare(b.slug));
+  const selectedTrigger = triggerId ? triggerById.get(triggerId) : null;
 
   const inputStyle: React.CSSProperties = {
     padding: '3px 6px', background: '#0a0b0e',
@@ -399,6 +481,8 @@ function CueForm({
           ))}
         </select>
       </label>
+
+      <TriggerAudioPanel trigger={selectedTrigger ?? null} />
 
       <label style={lblStyle}>
         <span style={{ minWidth: 80 }}>override_text</span>
@@ -473,6 +557,145 @@ function CueForm({
           {submitting ? 'Сохранение…' : initial ? 'Сохранить' : 'Создать'}
         </button>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Панель управления mp3 для выбранного триггера. Показывается прямо в форме
+// cue, чтобы admin не лез в отдельную вкладку только чтобы понять, что
+// озвучка не привязана. Превью каждого варианта + ссылка на TriggerDetailPage
+// для загрузки/редактирования mp3.
+// ---------------------------------------------------------------------------
+function TriggerAudioPanel({ trigger }: { trigger: Trigger | null }) {
+  if (trigger === null) {
+    return (
+      <div style={{
+        marginLeft: 86, fontSize: 11, opacity: 0.55, fontStyle: 'italic',
+      }}>
+        Без триггера — будет проигран только <code>override_text</code> через
+        typewriter (без mp3). Нужен голос — выберите триггер выше или
+        {' '}
+        <Link
+          to="/admin/triggers/new"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: '#a4c8e8' }}
+        >
+          создайте новый ↗
+        </Link>.
+      </div>
+    );
+  }
+
+  if (trigger.kind === 'composite') {
+    return (
+      <div style={{
+        marginLeft: 86, fontSize: 11, color: '#c8a04a',
+      }}>
+        Триггер composite — собирается из сегментов с placeholder'ами (имя
+        игрока и т.п.). Управление —{' '}
+        <Link
+          to={`/admin/triggers/${trigger.id}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: '#a4c8e8' }}
+        >
+          в админке триггера ↗
+        </Link>.
+      </div>
+    );
+  }
+
+  const variants = trigger.variants;
+  const withAudio = variants.filter((v) => Boolean(v.audio_file_id));
+  const withoutAudio = variants.length - withAudio.length;
+
+  return (
+    <div style={{
+      marginLeft: 86, padding: 6, borderRadius: 3,
+      border: '1px solid #2a2d33', background: '#0a0b0e',
+    }}>
+      <div style={{
+        display: 'flex', justifyContent: 'space-between',
+        alignItems: 'baseline', marginBottom: 4, gap: 8,
+      }}>
+        <span style={{ fontSize: 11, opacity: 0.7 }}>
+          Озвучка триггера: <strong>{withAudio.length}</strong> с mp3
+          {withoutAudio > 0 && ` · ${withoutAudio} без аудио`}
+          {variants.length === 0 && ' · вариантов нет'}
+        </span>
+        <Link
+          to={`/admin/triggers/${trigger.id}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            fontSize: 11, padding: '2px 8px', borderRadius: 3,
+            background: '#1a3a4f', color: '#a4c8e8',
+            border: '1px solid #2a5a7f', textDecoration: 'none',
+          }}
+        >
+          🛠 Управлять mp3 ↗
+        </Link>
+      </div>
+
+      {variants.length === 0 ? (
+        <div style={{ fontSize: 11, opacity: 0.5, fontStyle: 'italic' }}>
+          У триггера нет ни одного варианта. Перейдите в админку триггера и
+          добавьте хотя бы один (с mp3 или без — будет typewriter-fallback).
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          {variants.slice(0, 5).map((v) => (
+            <VariantPreviewRow key={v.id} variant={v} />
+          ))}
+          {variants.length > 5 && (
+            <div style={{ fontSize: 10, opacity: 0.5 }}>
+              … и ещё {variants.length - 5} вариант(ов) — см. админку триггера
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VariantPreviewRow({ variant }: { variant: Variant }) {
+  const hasAudio = Boolean(variant.audio_url);
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 6,
+      fontSize: 11, padding: '2px 4px',
+      borderRadius: 2, background: '#1a1d22',
+    }}>
+      <span style={{
+        fontSize: 10, minWidth: 36, textAlign: 'center',
+        padding: '0 4px', borderRadius: 8,
+        background: hasAudio ? '#1a3a22' : '#3a1a1a',
+        color: hasAudio ? '#a4e8b8' : '#e8a4a4',
+        border: hasAudio ? '1px solid #2a5a33' : '1px solid #5a2a2a',
+      }}>
+        {hasAudio ? '🔊 mp3' : '🔇'}
+      </span>
+      <span style={{
+        flex: 1, overflow: 'hidden', textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap', opacity: 0.85,
+      }}>
+        {variant.text || <em style={{ opacity: 0.5 }}>(без текста)</em>}
+      </span>
+      {variant.duration_ms != null && (
+        <span style={{ fontSize: 10, opacity: 0.5 }}>
+          {(variant.duration_ms / 1000).toFixed(1)}s
+        </span>
+      )}
+      {hasAudio && variant.audio_url && (
+        <audio
+          src={variant.audio_url}
+          controls
+          preload="none"
+          style={{ height: 22, maxWidth: 160 }}
+        />
+      )}
     </div>
   );
 }

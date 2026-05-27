@@ -61,6 +61,9 @@ class CompositeTemplateResponse(BaseModel):
 class TriggerResponse(BaseModel):
     id: str
     slug: str
+    # None — global триггер (доступен всем сюжетам). Строковый UUID
+    # — триггер привязан к конкретному сюжету (story-scoped).
+    story_id: str | None = None
     group_key: str
     label: str
     description: str | None
@@ -114,9 +117,15 @@ class PlaceholdersListResponse(BaseModel):
 
 
 class TriggerCreate(BaseModel):
-    """Создание нового триггера. ``kind`` после создания не меняется."""
+    """Создание нового триггера. ``kind`` после создания не меняется.
+
+    ``story_id``: None или отсутствует — global триггер (доступен всем сюжетам).
+    Строковый UUID — триггер привязан к этому сюжету и удаляется
+    каскадно при его удалении.
+    """
 
     slug: str = Field(..., min_length=1, max_length=80)
+    story_id: str | None = Field(default=None)
     group_key: str = Field(..., min_length=1, max_length=50)
     label: str = Field(..., min_length=1, max_length=120)
     description: str | None = Field(default=None, max_length=2000)
