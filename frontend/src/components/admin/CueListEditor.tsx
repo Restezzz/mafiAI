@@ -149,9 +149,11 @@ export default function CueListEditor({
         editingId === cue.id ? (
           <CueForm
             key={cue.id}
+            storyId={storyId}
             triggers={triggers}
             triggerById={triggerById}
             initial={cue}
+            onTriggersReload={onTriggersReload}
             onCancel={() => setEditingId(null)}
             onSubmit={async (form) => {
               setBusy(true);
@@ -197,9 +199,11 @@ export default function CueListEditor({
 
       {adding ? (
         <CueForm
+          storyId={storyId}
           triggers={triggers}
           triggerById={triggerById}
           initial={null}
+          onTriggersReload={onTriggersReload}
           onCancel={() => setAdding(false)}
           onSubmit={async (form) => {
             setBusy(true);
@@ -410,13 +414,15 @@ interface CueFormValues {
 }
 
 function CueForm({
-  triggers, triggerById, initial, onSubmit, onCancel,
+  storyId, triggers, triggerById, initial, onSubmit, onCancel, onTriggersReload,
 }: {
+  storyId: string;
   triggers: Trigger[];
   triggerById: Map<string, Trigger>;
   initial: StoryNarrationCue | null;
   onSubmit: (form: CueFormValues) => Promise<void> | void;
   onCancel: () => void;
+  onTriggersReload?: () => Promise<void> | void;
 }) {
   const [triggerId, setTriggerId] = useState<string | null>(
     initial?.trigger_id ?? null,
@@ -428,6 +434,7 @@ function CueForm({
   const [pauseBefore, setPauseBefore] = useState(initial?.pause_before_ms ?? 0);
   const [pauseAfter, setPauseAfter] = useState(initial?.pause_after_ms ?? 0);
   const [submitting, setSubmitting] = useState(false);
+  const [creatingTrigger, setCreatingTrigger] = useState(false);
 
   const sortedTriggers = [...triggers].sort((a, b) => a.slug.localeCompare(b.slug));
   const selectedTrigger = triggerId ? triggerById.get(triggerId) : null;
@@ -476,13 +483,42 @@ function CueForm({
           <option value="">— нет (использовать override_text) —</option>
           {sortedTriggers.map((t) => (
             <option key={t.id} value={t.id}>
-              {t.slug} · {t.label}
+              {t.story_id ? '📁' : '🌐'} {t.slug} · {t.label}
             </option>
           ))}
         </select>
+        <button
+          type="button"
+          onClick={() => setCreatingTrigger(true)}
+          disabled={submitting}
+          title="Создать новый story-scoped триггер inline"
+          style={{
+            fontSize: 11, padding: '3px 8px',
+            background: '#1a3a4f', border: '1px solid #2a5a7f',
+            color: '#a4c8e8', borderRadius: 3, cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          + новый
+        </button>
       </label>
 
       <TriggerAudioPanel trigger={selectedTrigger ?? null} />
+
+      {creatingTrigger && (
+        <InlineTriggerCreator
+          storyId={storyId}
+          onCancel={() => setCreatingTrigger(false)}
+          onCreated={async (newTrigger) => {
+            setCreatingTrigger(false);
+            if (onTriggersReload) {
+              await onTriggersReload();
+            }
+            // Автоматически выбираем свежесозданный триггер.
+            setTriggerId(newTrigger.id);
+          }}
+        />
+      )}
 
       <label style={lblStyle}>
         <span style={{ minWidth: 80 }}>override_text</span>

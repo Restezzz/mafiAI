@@ -17,6 +17,27 @@ fastapi_stub.WebSocket = object
 fastapi_stub.APIRouter = type("APIRouter", (), {"get": lambda *a, **kw: lambda f: f, "post": lambda *a, **kw: lambda f: f, "put": lambda *a, **kw: lambda f: f, "patch": lambda *a, **kw: lambda f: f, "delete": lambda *a, **kw: lambda f: f})
 fastapi_stub.Depends = lambda x=None: None
 fastapi_stub.Query = lambda *a, **kw: None
+# File/Form/UploadFile/Response — нужны для multipart-роутеров (admin_narrator
+# upload_audio_file и т.п.). Без них импорт роутера в unit-тесте падает.
+fastapi_stub.File = lambda *a, **kw: None
+fastapi_stub.Form = lambda *a, **kw: None
+fastapi_stub.UploadFile = object
+fastapi_stub.Response = object
+fastapi_stub.HTTPException = type("HTTPException", (Exception,), {"__init__": lambda self, *a, **kw: None})
+# status — модуль с HTTP константами. Используется как status.HTTP_201_CREATED.
+fastapi_status_stub = types.SimpleNamespace(
+    HTTP_200_OK=200,
+    HTTP_201_CREATED=201,
+    HTTP_204_NO_CONTENT=204,
+    HTTP_400_BAD_REQUEST=400,
+    HTTP_401_UNAUTHORIZED=401,
+    HTTP_403_FORBIDDEN=403,
+    HTTP_404_NOT_FOUND=404,
+    HTTP_409_CONFLICT=409,
+    HTTP_422_UNPROCESSABLE_ENTITY=422,
+    HTTP_500_INTERNAL_SERVER_ERROR=500,
+)
+fastapi_stub.status = fastapi_status_stub
 
 fastapi_responses_stub = types.ModuleType("fastapi.responses")
 fastapi_responses_stub.JSONResponse = object

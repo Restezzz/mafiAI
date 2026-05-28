@@ -366,6 +366,7 @@ export default function AdminStoryEditorPage() {
                     cues={step.cues}
                     triggers={triggers}
                     onRefetch={fetchStory}
+                    onTriggersReload={reloadTriggers}
                   />
                 )}
               </div>
