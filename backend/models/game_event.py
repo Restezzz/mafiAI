@@ -19,10 +19,11 @@ class GameEvent(Base):
         CheckConstraint(
             "event_type IN ("
             "'player_joined', 'player_left', 'game_started', "
-            "'player_renamed', "
+            "'player_renamed', 'player_kicked', "
             "'role_acknowledged', 'all_acknowledged', 'phase_changed', "
             "'night_action_submitted', 'night_result', 'player_eliminated', "
-            "'vote_cast', 'vote_result', 'game_finished', 'session_closed'"
+            "'vote_cast', 'vote_result', 'game_finished', 'session_closed', "
+            "'story_vote_started', 'story_vote'"
             ")",
             name="ck_game_events_type",
         ),
