@@ -14,7 +14,6 @@
   ``resolve_night`` / ``resolve_votes`` (этап 2.4). Записывают
   winner_team / died_role / vote_tie в ``step_vars`` для условий.
 - ``branch``     — без UI, сразу advance.
-- ``pause``      — ``asyncio.sleep`` без WS.
 - ``end``        — sessions.status='finished', game_finished WS.
 
 После каждого шага вызывается ``_advance``: ищет лучший transition
@@ -330,7 +329,6 @@ async def _run_step(session_id: uuid.UUID, step: StoryStep) -> None:
         "narration": _handle_narration,
         "branch": _handle_branch,
         "end": _handle_end,
-        "pause": _handle_pause,
         "role_action": _handle_role_action,
         "discussion": _handle_discussion,
         "voting": _handle_voting,
@@ -911,30 +909,6 @@ async def _handle_branch(session_id: uuid.UUID, step: StoryStep) -> None:
         session_id=str(session_id),
         step_slug=step.slug,
     )
-
-
-async def _handle_pause(session_id: uuid.UUID, step: StoryStep) -> None:
-    """Тихая пауза. Длительность из step.payload.duration_ms (default 1000).
-
-    Используется для inter-cue gap'ов между крупными секциями (если admin
-    хочет 2-3 секунды тишины между «Доктор закрыл глаза» и «Утро»).
-
-    Этап 3: длительность умножается на effective timer_multiplier — если
-    хост ускорил/замедлил всё в 2 раза, паузы тоже масштабируются.
-    """
-    duration_ms = int(step.payload.get("duration_ms", 1000))
-    if duration_ms <= 0:
-        return
-    # Локальный импорт чтобы не тянуть game_engine в test env без БД.
-    from services.game_engine import _wait_or_pause
-
-    async with async_session_factory() as db:
-        session = await db.get(Session, session_id)
-        eff = await _load_effective_settings(db, session)
-    scaled_ms = int(duration_ms * eff["multiplier"])
-    if scaled_ms <= 0:
-        return
-    await _wait_or_pause(session_id, scaled_ms / 1000)
 
 
 async def _handle_end(session_id: uuid.UUID, step: StoryStep) -> None:

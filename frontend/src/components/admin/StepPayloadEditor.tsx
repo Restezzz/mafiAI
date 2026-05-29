@@ -8,7 +8,6 @@
  *   exclude_self_target.
  * - discussion: timer_setting (default 'discussion_timer_seconds').
  * - voting: timer_setting (default 'voting_timer_seconds').
- * - pause: duration_ms.
  * - narration / branch / end / night_resolve / day_resolve: kind-специфичных
  *   полей нет, но phase_action универсальный (см. ниже).
  *
@@ -81,7 +80,6 @@ function PayloadForm({
   const [timerSetting, setTimerSetting] = useState<string>(initial.timer_setting);
   const [skipIfDead, setSkipIfDead] = useState<boolean>(initial.skip_if_dead);
   const [excludeSelf, setExcludeSelf] = useState<boolean>(initial.exclude_self_target);
-  const [durationMs, setDurationMs] = useState<string>(initial.duration_ms);
 
   // raw JSON для extra полей. Парсим существующий payload минус known.
   const [rawJson, setRawJson] = useState<string>(() => {
@@ -115,7 +113,6 @@ function PayloadForm({
       timer_setting: timerSetting,
       skip_if_dead: skipIfDead,
       exclude_self_target: excludeSelf,
-      duration_ms: durationMs,
     }, extra);
 
     setSaving(true);
@@ -243,23 +240,6 @@ function PayloadForm({
         </label>
       )}
 
-      {step.kind === 'pause' && (
-        <label style={lblStyle}>
-          <span style={{ minWidth: 100 }}>duration_ms</span>
-          <input
-            type="number"
-            value={durationMs}
-            onChange={(e) => setDurationMs(e.target.value)}
-            placeholder="1000"
-            min={0}
-            style={{ ...inputStyle, width: 100 }}
-          />
-          <span style={{ fontSize: 10, opacity: 0.6 }}>
-            ms (×timer_multiplier)
-          </span>
-        </label>
-      )}
-
       <details>
         <summary style={{
           cursor: 'pointer', fontSize: 11, opacity: 0.7, marginTop: 4,
@@ -330,9 +310,6 @@ function knownFields(kind: StoryStepKind): Set<string> {
     case 'voting':
       base.add('timer_setting');
       break;
-    case 'pause':
-      base.add('duration_ms');
-      break;
     default:
       break;
   }
@@ -358,7 +335,6 @@ interface InitialFields {
   timer_setting: string;
   skip_if_dead: boolean;
   exclude_self_target: boolean;
-  duration_ms: string;
 }
 
 function parseInitial(
@@ -372,9 +348,6 @@ function parseInitial(
     timer_setting: typeof payload.timer_setting === 'string' ? payload.timer_setting : '',
     skip_if_dead: payload.skip_if_dead !== false, // default true
     exclude_self_target: payload.exclude_self_target !== false, // default true
-    duration_ms: typeof payload.duration_ms === 'number'
-      ? String(payload.duration_ms)
-      : typeof payload.duration_ms === 'string' ? payload.duration_ms : '',
   };
 }
 
@@ -398,11 +371,6 @@ function buildPayload(
     if (!fields.exclude_self_target) out.exclude_self_target = false;
   } else if (kind === 'discussion' || kind === 'voting') {
     if (fields.timer_setting) out.timer_setting = fields.timer_setting;
-  } else if (kind === 'pause') {
-    if (fields.duration_ms !== '') {
-      const n = Number(fields.duration_ms);
-      if (!Number.isNaN(n) && n >= 0) out.duration_ms = n;
-    }
   }
   return out;
 }

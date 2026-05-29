@@ -40,7 +40,6 @@ const STEP_KINDS: StoryStepKind[] = [
   'night_resolve',
   'day_resolve',
   'branch',
-  'pause',
   'end',
 ];
 

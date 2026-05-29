@@ -37,7 +37,6 @@ export type StoryStepKind =
   | 'voting'
   | 'night_resolve'
   | 'day_resolve'
-  | 'pause'
   | 'branch'
   | 'end'
   | 'names'

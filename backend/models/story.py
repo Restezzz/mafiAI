@@ -4,7 +4,7 @@
 - ``Story`` — корневая запись сюжета.
 - ``StorySettings`` — настройки сюжета (1:1, общие параметры).
 - ``StoryStep`` — узел графа (kind ∈ narration | role_action | discussion |
-  voting | night_resolve | day_resolve | pause | branch | end).
+  voting | night_resolve | day_resolve | branch | end | names | roles).
 - ``StoryNarrationCue`` — фраза диктора в шаге ``kind='narration'``.
   Ссылается на существующий ``NarratorTrigger`` (но trigger опционален —
   cue может быть text-only через override_text).
@@ -53,7 +53,6 @@ STORY_STEP_KINDS = (
     "voting",          # дневное голосование
     "night_resolve",   # подсчёт жертв ночи
     "day_resolve",     # резолв голосования + win-check
-    "pause",           # фиксированная пауза (seconds в payload)
     "branch",          # no-op, выбор edge по condition
     "end",             # финал игры
     "names",           # нода имён: варианты произношения имён + их mp3

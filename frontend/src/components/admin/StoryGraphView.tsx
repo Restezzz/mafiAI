@@ -53,7 +53,6 @@ const KIND_COLORS: Record<string, string> = {
   narration: '#5fa05f',
   role_action: '#a4b8e4',
   branch: '#d8a96a',
-  pause: '#8c8f95',
   end: '#c81e1e',
   resolve_night: '#b08bff',
   resolve_votes: '#b08bff',
