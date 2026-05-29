@@ -403,6 +403,29 @@ async def update_settings(
         civilian = validate_role_config(session.player_count, rc)
         patch["role_config"] = {**rc, "civilian": civilian}
 
+    # Story Engine (этап 2.6): story_id и use_story_engine не идут в jsonb
+    # session.settings — у Session уже есть отдельная FK-колонка story_id,
+    # а use_story_engine остаётся в jsonb для compat-shim'а.
+    if "story_id" in patch:
+        story_id_value = patch.pop("story_id")
+        if story_id_value is not None:
+            # Локальный импорт чтобы не тянуть Story модель в каждый legacy
+            # импорт lobby.py.
+            from models.story import Story
+            story = await db.scalar(
+                select(Story).where(Story.id == story_id_value)
+            )
+            if story is None:
+                raise GameError(404, "story_not_found", "Сюжет не найден")
+            if story.is_obsolete:
+                raise GameError(
+                    409, "story_obsolete",
+                    "Этот сюжет архивирован и не доступен для новых игр",
+                )
+            session.story_id = story_id_value
+        else:
+            session.story_id = None
+
     session.settings = {**current, **patch}
     await db.commit()
     log_event(
@@ -415,11 +438,19 @@ async def update_settings(
         updated_fields=list(patch.keys()),
     )
 
+    # Включаем story_id (FK-колонка, не в jsonb) в ответ, чтобы фронт
+    # получил актуальное значение после смены сюжета.
+    response_settings = {**session.settings}
+    if session.story_id is not None:
+        response_settings["story_id"] = str(session.story_id)
+    else:
+        response_settings.pop("story_id", None)
+
     await ws_manager.send_to_session(
         session_id,
-        {"type": "settings_updated", "payload": {"settings": session.settings}},
+        {"type": "settings_updated", "payload": {"settings": response_settings}},
     )
-    return {"settings": session.settings}
+    return {"settings": response_settings}
 
 
 @router.post("/{session_id}/pause")

@@ -58,6 +58,12 @@ export interface Announcement {
   // ISO8601, момент когда сервер начал «озвучивать» — нужен для синхронизации
   // typewriter/прогресс-бара между клиентами и при reload/перезаходе на страницу.
   started_at?: string;
+  // Story Engine: если true, NarratorScreen рендерит подсветку слов (karaoke)
+  // вместо per-char typewriter'а. Equally-spaced распределение по словам —
+  // duration_ms / words.length мс на слово. Источник: story.settings.karaoke_enabled
+  // прокидывается в _build_narration_steps. Legacy путь не задаёт это поле
+  // (остаётся undefined → per-char typewriter).
+  karaoke?: boolean;
 }
 
 export interface MyPlayer {
@@ -107,6 +113,16 @@ export interface SessionSettings {
   night_action_timer_seconds: number;
   role_config: RoleConfig;
   dev_test_lobby?: boolean;
+  // Story Engine (этап 2.6): включён ли альтернативный gameplay flow.
+  // story_id хранится отдельной FK-колонкой sessions.story_id, но
+  // прокидывается через тот же settings-form для удобства UI.
+  use_story_engine?: boolean;
+  story_id?: string | null;
+  // Story Engine pre-game overrides (этап 3). Накладываются поверх
+  // story.settings.{timer_multiplier_default, inter_cue_pause_seconds}.
+  // null/undefined = «использовать дефолт сюжета».
+  timer_multiplier?: number | null;
+  inter_cue_pause_seconds?: number | null;
 }
 
 export interface DevLobbyPlayerLink {

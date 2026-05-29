@@ -32,6 +32,11 @@ const TriggerDetailPage = lazy(() => import('./pages/admin/TriggerDetailPage'));
 const TriggerCreatePage = lazy(() => import('./pages/admin/TriggerCreatePage'));
 const AudioLibraryPage = lazy(() => import('./pages/admin/AudioLibraryPage'));
 const NameAssetsPage = lazy(() => import('./pages/admin/NameAssetsPage'));
+const AdminUsersPage = lazy(() => import('./pages/admin/AdminUsersPage'));
+const AdminStoriesListPage = lazy(() => import('./pages/admin/AdminStoriesListPage'));
+const AdminStoryEditorPage = lazy(() => import('./pages/admin/AdminStoryEditorPage'));
+const AdminStoryGraphPage = lazy(() => import('./pages/admin/AdminStoryGraphPage'));
+const AdminSessionsPage = lazy(() => import('./pages/admin/AdminSessionsPage'));
 
 // Dev-only UI showcase page. В production-build lazy-импорт dead-code-elim-ится
 // благодаря NODE_ENV-гварду (Terser). `process.env.NODE_ENV` — единственный
@@ -120,6 +125,11 @@ const router = createBrowserRouter([
       { path: 'triggers/:id', element: withSuspense(<TriggerDetailPage />) },
       { path: 'audio', element: withSuspense(<AudioLibraryPage />) },
       { path: 'names', element: withSuspense(<NameAssetsPage />) },
+      { path: 'users', element: withSuspense(<AdminUsersPage />) },
+      { path: 'sessions', element: withSuspense(<AdminSessionsPage />) },
+      { path: 'stories', element: withSuspense(<AdminStoriesListPage />) },
+      { path: 'stories/:storyId', element: withSuspense(<AdminStoryGraphPage />) },
+      { path: 'stories/:storyId/legacy', element: withSuspense(<AdminStoryEditorPage />) },
     ],
   },
   ...devRoutes,

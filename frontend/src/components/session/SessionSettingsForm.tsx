@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Slider from '../ui/Slider';
 import Stepper from '../ui/Stepper';
 import { SessionSettings, RoleConfig } from '../../types/game';
@@ -8,6 +8,8 @@ import {
   getSpecialRolesCount,
   getCiviliansCount,
 } from '../../stores/sessionStore';
+import { storiesApi, PublicStoryItem } from '../../api/storiesApi';
+import { logger } from '../../services/logger';
 import './SessionSettingsForm.scss';
 
 interface SessionSettingsFormProps {
@@ -36,6 +38,35 @@ export default function SessionSettingsForm({
   const rolesExceed = specialCount > playerCount;
 
   const classes = ['settings-form', className ?? ''].filter(Boolean).join(' ');
+
+  // Подгружаем список сюжетов один раз при mount, чтобы хост мог выбрать
+  // конкретный story_id из drop-down. Бэкенд (api/routers/stories.py)
+  // возвращает только активные не-obsolete версии. На ошибку (например
+  // миграция Story Engine не применена) — просто скрываем секцию.
+  const [stories, setStories] = useState<PublicStoryItem[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    storiesApi
+      .list()
+      .then((res) => {
+        if (!cancelled) setStories(res.data.stories);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          logger.warn('lobby.stories_fetch_failed', 'Failed to fetch story list', {
+            reason: err instanceof Error ? err.message : String(err),
+          });
+          // Пустой массив — секция скрыта (см. ниже {stories && stories.length > 0}).
+          setStories([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const useStoryEngine = settings.use_story_engine === true;
+  const currentStoryId = settings.story_id ?? '';
 
   return (
     <div className={classes}>
@@ -153,6 +184,95 @@ export default function SessionSettingsForm({
           </div>
         )}
       </section>
+
+      {stories && stories.length > 0 && (
+        <section className="settings-form__section">
+          <h4 className="settings-form__section-title">Сюжет (бета)</h4>
+          <label className="settings-form__toggle">
+            <input
+              type="checkbox"
+              checked={useStoryEngine}
+              onChange={(e) => {
+                const enabled = e.target.checked;
+                // При включении автоматически выбираем первый доступный
+                // сюжет, если ничего не выбрано — иначе бэк отклонит запуск
+                // (story_id обязателен при use_story_engine=true).
+                const nextStoryId =
+                  enabled && !currentStoryId ? stories[0].id : currentStoryId || null;
+                onChangeTimers({
+                  use_story_engine: enabled,
+                  story_id: nextStoryId,
+                });
+              }}
+            />
+            <span>Использовать новый сюжетный движок</span>
+          </label>
+          {useStoryEngine && (
+            <>
+              <label className="settings-form__story-select">
+                <span className="settings-form__story-select-label">Сюжет</span>
+                <select
+                  value={currentStoryId}
+                  onChange={(e) =>
+                    onChangeTimers({ story_id: e.target.value || null })
+                  }
+                >
+                  {stories.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} (v{s.version})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {/*
+                Pre-game overrides (этап 3). null = используется дефолт сюжета.
+                Слайдеры показывают override; чтобы вернуть дефолт — кнопка
+                «Сброс». Backend (StorySettings) применяет override поверх
+                story.settings_default.
+              */}
+              <Slider
+                label={`Множитель таймеров${
+                  settings.timer_multiplier == null ? ' (дефолт сюжета)' : ''
+                }`}
+                value={settings.timer_multiplier ?? 1.0}
+                min={0.5}
+                max={2.0}
+                step={0.05}
+                unit="x"
+                onChange={(v) => onChangeTimers({ timer_multiplier: v })}
+              />
+              <Slider
+                label={`Пауза между фразами${
+                  settings.inter_cue_pause_seconds == null
+                    ? ' (дефолт сюжета)'
+                    : ''
+                }`}
+                value={settings.inter_cue_pause_seconds ?? 0}
+                min={0}
+                max={5}
+                step={0.1}
+                unit="с"
+                onChange={(v) => onChangeTimers({ inter_cue_pause_seconds: v })}
+              />
+              {(settings.timer_multiplier != null ||
+                settings.inter_cue_pause_seconds != null) && (
+                <button
+                  type="button"
+                  className="settings-form__reset-btn"
+                  onClick={() =>
+                    onChangeTimers({
+                      timer_multiplier: null,
+                      inter_cue_pause_seconds: null,
+                    })
+                  }
+                >
+                  Сбросить overrides к дефолту сюжета
+                </button>
+              )}
+            </>
+          )}
+        </section>
+      )}
     </div>
   );
 }

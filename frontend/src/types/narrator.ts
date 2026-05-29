@@ -19,6 +19,7 @@ export interface Variant {
   id: string;
   audio_file_id: string | null;
   audio_url: string | null;
+  audio_filename: string | null;
   text: string;
   duration_ms: number | null;
   sort_order: number;
@@ -44,6 +45,10 @@ export interface CompositeTemplate {
 export interface Trigger {
   id: string;
   slug: string;
+  /**
+   * null — global trigger (виден всем сюжетам). UUID — story-scoped.
+   */
+  story_id: string | null;
   group_key: string;
   label: string;
   description: string | null;
@@ -73,10 +78,22 @@ export interface PlaceholderInfo {
 
 export interface TriggerCreatePayload {
   slug: string;
+  /**
+   * null/undefined — global trigger. UUID — story-scoped, удаляется
+   * каскадно вместе со сюжетом.
+   */
+  story_id?: string | null;
   group_key: string;
   label: string;
   description?: string | null;
   kind: TriggerKind;
+}
+
+export interface ListTriggersParams {
+  /** Фильтр по сюжету. */
+  story_id?: string;
+  /** Если true + story_id — включает global-триггеры (story_id IS NULL). */
+  include_global?: boolean;
 }
 
 export interface TriggerUpdatePayload {

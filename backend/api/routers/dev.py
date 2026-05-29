@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from api.deps import get_current_user, get_db
+from api.deps import get_db, require_admin_or_dev_env
 from core.exceptions import GameError
 from core.logging import log_event, set_log_context
 from models.dev_test_lobby_link import DevTestLobbyLink
@@ -41,6 +41,27 @@ from services.ws_manager import ws_manager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _build_me_response_for_dev_player(user: User) -> MeResponse:
+    """Собирает MeResponse для активированного dev-игрока.
+
+    Выделено в helper, чтобы при добавлении нового обязательного поля в
+    MeResponse (например, is_admin был добавлен после первой версии активации)
+    /dev/test-lobbies/activate не падал тихо ResponseValidationError'ом —
+    Pydantic-исключение через BaseHTTPMiddleware + CORSMiddleware приходит
+    к браузеру оборванным соединением, axios репортит ERR_NETWORK, и фронт
+    пишет «Нет связи с сервером», что крайне сложно дебажить.
+    """
+    return MeResponse(
+        user_id=str(user.id),
+        email=user.email,
+        nickname=user.display_name,
+        has_pro=False,
+        is_admin=bool(user.is_admin),
+        created_at=user.created_at.isoformat() if user.created_at else "",
+        avatar_url=user.avatar_url,
+    )
 
 
 def _default_test_lobby_settings(player_count: int) -> dict:
@@ -80,7 +101,7 @@ async def _get_dev_test_session_or_404(db: AsyncSession, session_id: uuid.UUID) 
 
 @router.post("/test-lobbies", response_model=SessionDetailResponse, status_code=201)
 async def create_test_lobby(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin_or_dev_env),
     db: AsyncSession = Depends(get_db),
 ) -> SessionDetailResponse:
     current_user_id = current_user.id
@@ -145,7 +166,7 @@ async def create_test_lobby(
 @router.post("/test-lobbies/{session_id}/expand", response_model=SessionDetailResponse)
 async def expand_test_lobby(
     session_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin_or_dev_env),
     db: AsyncSession = Depends(get_db),
 ) -> SessionDetailResponse:
     current_user_id = current_user.id
@@ -212,7 +233,7 @@ MIN_TEST_LOBBY_PLAYER_COUNT = 3
 @router.post("/test-lobbies/{session_id}/shrink", response_model=SessionDetailResponse)
 async def shrink_test_lobby(
     session_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin_or_dev_env),
     db: AsyncSession = Depends(get_db),
 ) -> SessionDetailResponse:
     current_user_id = current_user.id
@@ -329,11 +350,5 @@ async def activate_test_lobby_player(
     return ActivateDevPlayerResponse(
         access_token=access_token,
         refresh_token=refresh_token,
-        user=MeResponse(
-            user_id=str(user.id),
-            email=user.email,
-            nickname=user.display_name,
-            has_pro=False,
-            created_at=user.created_at.isoformat() if user.created_at else "",
-        ),
+        user=_build_me_response_for_dev_player(user),
     )

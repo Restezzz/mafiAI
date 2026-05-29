@@ -581,17 +581,30 @@ export const useGameStore = create<GameState>((set, get) => ({
     // execute_night_sequence). В таком случае НЕ затираем текущее окно
     // нулями: иначе плашки игроков (availableTargets) исчезают сразу после
     // resume, и юзер не может выбрать жертву, пока не придёт action_required.
+    //
+    // НО: если phase ИДЕНТИЧНОСТЬ изменилась (тип/sub_phase/номер), то stale-state
+    // из предыдущей фазы тащить нельзя — иначе после day_voting → night у не-актёров
+    // остаётся awaitingAction=true и availableTargets=кандидаты из голосования,
+    // и они видят NightActionScreen с карточками голосования вместо night_waiting.
     set((state) => {
       if (state.screen === 'finale' || state.result) return state;
+      const phaseIdentityChanged =
+        state.phase?.type !== phase.type ||
+        (state.phase?.sub_phase ?? null) !== (phase.sub_phase ?? null) ||
+        state.phase?.number !== phase.number;
+      const awaitingActionFallback = phaseIdentityChanged ? false : state.awaitingAction;
+      const actionTypeFallback: NightActionType | null = phaseIdentityChanged ? null : state.actionType;
+      const targetsFallback: Target[] = phaseIdentityChanged ? [] : state.availableTargets;
+
       const awaitingAction: boolean =
-        phasePayload.awaiting_action ?? state.awaitingAction ?? false;
+        phasePayload.awaiting_action ?? awaitingActionFallback ?? false;
       const incomingActionType: NightActionType | null =
-        phasePayload.action_type !== undefined ? phasePayload.action_type : state.actionType;
-      // `?? state.availableTargets` покрывает оба случая отсутствия поля:
+        phasePayload.action_type !== undefined ? phasePayload.action_type : actionTypeFallback;
+      // `?? targetsFallback` покрывает оба случая отсутствия поля:
       // undefined (поле не отправлено backend'ом) И null (явно очищено).
-      // Затирать `[]` нельзя — иначе плашки исчезают после game_resumed.
+      // Затирать `[]` нельзя в рамках одной фазы — иначе плашки исчезают после game_resumed.
       const incomingTargets: Target[] =
-        phasePayload.available_targets ?? state.availableTargets;
+        phasePayload.available_targets ?? targetsFallback;
 
       const nextAnnouncement = resolveAnnouncement(state.currentAnnouncement, announcement);
       const sameActionWindow =

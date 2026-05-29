@@ -144,6 +144,25 @@
   }
 }
 
+// Karaoke-режим (Story Engine, settings.karaoke_enabled=true).
+// Текст показывается целиком, по словам подсвечивается active-слово.
+// Прошедшие слова — приглушены, текущее — белое с лёгким glow, будущие —
+// серые. Equally-spaced распределение длительности — backend всегда
+// устанавливает duration_ms, фронт делит на wordCount.
+.narrator-screen__text--karaoke {
+  .narrator-word {
+    color: rgba(255, 255, 255, 0.45);
+    transition: color 0.2s ease, text-shadow 0.2s ease;
+  }
+  .narrator-word--active {
+    color: #ffffff;
+    text-shadow: 0 0 8px rgba(255, 255, 255, 0.4);
+  }
+  .narrator-word--past {
+    color: rgba(255, 255, 255, 0.7);
+  }
+}
+
 @keyframes narrator-ambient-pulse {
   0%, 100% { opacity: 0.6; }
   50% { opacity: 1; }

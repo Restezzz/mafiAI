@@ -7,6 +7,7 @@ import {
   CompositeTemplate,
   CompositeTemplateCreatePayload,
   CompositeTemplateUpdatePayload,
+  ListTriggersParams,
   NameAsset,
   NameAssetUpdatePayload,
   PlaceholderInfo,
@@ -23,7 +24,16 @@ const BASE = '/admin/narrator';
 
 export const adminNarratorApi = {
   // --- Triggers ---
-  listTriggers: () => httpClient.get<{ triggers: Trigger[] }>(`${BASE}/triggers`),
+  listTriggers: (params?: ListTriggersParams) =>
+    httpClient.get<{ triggers: Trigger[] }>(`${BASE}/triggers`, {
+      params: {
+        story_id: params?.story_id,
+        // axios скипает undefined, но false-параметры передаёт как 'false' —
+        // явно конвертируем в строку 'true', а если false/undefined — не
+        // включаем в querystring совсем (default backend = false).
+        ...(params?.include_global ? { include_global: 'true' } : {}),
+      },
+    }),
   getTrigger: (id: string) => httpClient.get<Trigger>(`${BASE}/triggers/${id}`),
   createTrigger: (payload: TriggerCreatePayload) =>
     httpClient.post<Trigger>(`${BASE}/triggers`, payload),
@@ -64,9 +74,7 @@ export const adminNarratorApi = {
   uploadAudioFile: (file: File) => {
     const fd = new FormData();
     fd.append('file', file);
-    return httpClient.post<AudioFile>(`${BASE}/audio-files`, fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    return httpClient.post<AudioFile>(`${BASE}/audio-files`, fd);
   },
   deleteAudioFile: (id: string) => httpClient.delete(`${BASE}/audio-files/${id}`),
 
@@ -78,9 +86,7 @@ export const adminNarratorApi = {
     fd.append('display_name', params.display_name);
     fd.append('gender', params.gender);
     fd.append('file', params.file);
-    return httpClient.post<NameAsset>(`${BASE}/name-assets`, fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    return httpClient.post<NameAsset>(`${BASE}/name-assets`, fd);
   },
   updateNameAsset: (id: string, payload: NameAssetUpdatePayload) =>
     httpClient.put<NameAsset>(`${BASE}/name-assets/${id}`, payload),

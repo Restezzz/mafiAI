@@ -264,6 +264,12 @@ $admin-warning: #d4a046;
     padding: 4px 10px;
     font-size: 0.8rem;
   }
+
+  &--active {
+    background: $admin-accent;
+    border-color: $admin-accent;
+    color: #fff;
+  }
 }
 
 .admin-input,
@@ -363,6 +369,63 @@ $admin-warning: #d4a046;
   font-size: 0.9rem;
 }
 
+.admin-success-banner {
+  background: rgba($admin-success, 0.1);
+  border: 1px solid rgba($admin-success, 0.4);
+  color: $admin-success;
+  padding: 12px 16px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 0.9rem;
+}
+
+// Список юзеров на /admin/users — простые ряды с email/role/toggle.
+.admin-users-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid $admin-border;
+  border-radius: 6px;
+  overflow: hidden;
+
+  &__row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 14px;
+    background: $admin-surface;
+    border-bottom: 1px solid $admin-border;
+
+    &:last-child {
+      border-bottom: none;
+    }
+
+    &:hover {
+      background: rgba($admin-accent, 0.04);
+    }
+  }
+
+  &__main {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  &__email {
+    font-size: 0.95rem;
+    color: $admin-text;
+    word-break: break-all;
+  }
+
+  &__sub {
+    font-size: 0.82rem;
+    color: $admin-text-muted;
+    margin-top: 2px;
+  }
+
+  &__role {
+    flex: 0 0 auto;
+  }
+}
+
 // Утилитные классы
 .admin-stack {
   display: flex;
@@ -405,5 +468,66 @@ $admin-warning: #d4a046;
   &--placeholder {
     background: rgba($admin-warning, 0.12);
     color: $admin-warning;
+  }
+}
+
+// Простая таблица для admin страниц (AdminSessionsPage). Тонкие границы,
+// hover-подсветка, спец-цвет для row-abandoned.
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+
+  th,
+  td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid $admin-border;
+    vertical-align: top;
+  }
+
+  th {
+    color: $admin-text-muted;
+    font-weight: 500;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  tbody tr {
+    transition: background 0.12s ease;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    &.row-abandoned {
+      background: rgba(232, 138, 58, 0.06);
+
+      &:hover {
+        background: rgba(232, 138, 58, 0.1);
+      }
+    }
+  }
+
+  code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85em;
+    color: $admin-text;
+  }
+
+  select {
+    background: $admin-surface;
+    color: $admin-text;
+    border: 1px solid $admin-border-strong;
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 0.85rem;
+
+    &:focus {
+      outline: none;
+      border-color: rgba($admin-success, 0.6);
+    }
   }
 }

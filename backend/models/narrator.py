@@ -70,6 +70,13 @@ class NarratorTrigger(Base):
 
     ``group_key`` нужен для UI-группировки в админке (например 'night_mafia',
     'finale'). ``label``/``description`` — человекочитаемые подписи.
+
+    ``story_id`` (этап 6.6): если NULL — триггер глобальный, доступен всем
+    сюжетам. Если выставлен — триггер привязан к конкретному сюжету и
+    автоматически удаляется при его удалении (CASCADE). Slug-уникальность
+    обеспечена двумя partial unique indexes (см. миграцию
+    20260527_story_scoped_triggers): один global slug, либо уникальный
+    (story_id, slug) per-story.
     """
     __tablename__ = "narrator_triggers"
     __table_args__ = (
@@ -82,7 +89,15 @@ class NarratorTrigger(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    slug: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
+    # ВНИМАНИЕ: НЕ unique=True. Уникальность обеспечена partial-индексами
+    # в миграции (global slug + per-story slug). Здесь только обычный index.
+    slug: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    story_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("stories.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     group_key: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     label: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

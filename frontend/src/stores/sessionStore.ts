@@ -178,6 +178,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (rc.maniac !== undefined) filtered.maniac = rc.maniac;
       payload.role_config = filtered;
     }
+    if (newSettings.use_story_engine !== undefined) {
+      payload.use_story_engine = newSettings.use_story_engine;
+    }
+    if (newSettings.story_id !== undefined) {
+      payload.story_id = newSettings.story_id;
+    }
+    if (newSettings.timer_multiplier !== undefined) {
+      payload.timer_multiplier = newSettings.timer_multiplier;
+    }
+    if (newSettings.inter_cue_pause_seconds !== undefined) {
+      payload.inter_cue_pause_seconds = newSettings.inter_cue_pause_seconds;
+    }
     const response = await sessionApi.updateSettings(state.session.id, payload);
     const updated = response.data?.settings as SessionSettings | undefined;
     if (updated) {
@@ -298,6 +310,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const { useGameStore: gStore } = await getGameStore();
     const sessionId = state.session?.id ?? gStore.getState().sessionId;
     if (!sessionId) return;
+
+    // Diagnostic: логируем call-stack чтобы поймать неожиданный источник
+    // (auto-test, browser ext, accidental keyboard event и т.п.). Будем
+    // удалять после того как разберёмся с pause-spam'ом в проде.
+    const stack = new Error().stack ?? '<no stack>';
+    logger.info('debug.setTimerPaused_called', 'setTimerPaused invoked', {
+      sessionId,
+      paused,
+      currentPaused: state.timerPaused,
+      stack: stack.split('\n').slice(1, 6).join(' | '),
+    }, { sessionId });
 
     // Optimistic update: мгновенно меняем UI чтобы пользователь не ждал
     // round-trip POST + WS broadcast (60-200ms на проде). Без этого хост

@@ -22,6 +22,7 @@ from core.logging_middleware import RequestContextLoggingMiddleware
 from core.rate_limit import limiter, rate_limit_exceeded_handler
 from services.recovery_service import recovery_loop
 from services.role_catalog import ensure_role_catalog
+from services.story_seed import ensure_classic_mafia_story
 from services.timer_service import timer_service
 
 
@@ -42,6 +43,18 @@ async def lifespan(app: FastAPI):
     CancelledError, callback'и могут не успеть откатиться → коррапт state.
     """
     await ensure_role_catalog()
+    # Story Engine seed: идемпотентен (early-return если classic_mafia уже
+    # в БД). Любая ошибка (например рассинхрон миграций story_engine_tables)
+    # НЕ должна валить весь backend — иначе uvicorn падает и nginx отдаёт 502.
+    # Логируем и продолжаем; gameplay по legacy-пути продолжает работать.
+    try:
+        await ensure_classic_mafia_story()
+    except Exception:
+        log_exception(
+            logger,
+            "app.story_seed_failed",
+            "Failed to seed classic_mafia story — Story Engine may be unavailable",
+        )
     recovery_task = asyncio.create_task(recovery_loop())
     log_event(logger, logging.INFO, "app.started", "Backend startup completed", app_env=settings.APP_ENV)
 
@@ -169,9 +182,10 @@ from api.routers.game import router as game_router
 from api.routers.logs import router as logs_router
 from api.routers.observability import router as observability_router
 from api.routers.subscriptions import router as subscriptions_router
+from api.routers.stories import router as stories_router
+from api.routers.dev import router as dev_router
+from api.routers.admin_users import router as admin_users_router
 from api.websockets.ws import router as ws_router
-if settings.APP_ENV == "development":
-    from api.routers.dev import router as dev_router
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(sessions_router, prefix="/api/sessions", tags=["sessions"])
@@ -180,6 +194,31 @@ app.include_router(game_router, prefix="/api/sessions", tags=["game"])
 app.include_router(logs_router, prefix="/api/logs", tags=["logs"])
 app.include_router(observability_router, prefix="/api/observability", tags=["observability"])
 app.include_router(subscriptions_router, prefix="/api/subscriptions", tags=["subscriptions"])
+# /api/stories — публичный список активных сюжетов для lobby UI (этап 2.6).
+# Изоляция по тому же паттерну что admin_stories: импорт делает SELECT при
+# первом запросе, поэтому если миграция Story Engine не применена, упадёт
+# не на startup а только при первом обращении (которое до миграций не
+# случится).
+app.include_router(stories_router, prefix="/api/stories", tags=["stories"])
+# /api/admin/users/* — управление is_admin флагами других юзеров. Гейт require_admin.
+app.include_router(admin_users_router, prefix="/api/admin", tags=["admin-users"])
+# /api/admin/sessions/* + /api/admin/cleanup/* — hygiene-роутер.
+# Регистрируется без изоляции: использует только базовые модели (Session,
+# User, Player, GamePhase), которые есть с самой первой миграции.
+from api.routers.admin_sessions import router as admin_sessions_router
+app.include_router(admin_sessions_router, prefix="/api/admin", tags=["admin-sessions"])
+# /api/admin/stories/* — Story Engine CRUD. Тот же изоляционный паттерн что и
+# admin_narrator: ошибка импорта (например ещё не накатили story_engine_tables
+# миграцию) логируется, но не валит uvicorn.
+try:
+    from api.routers.admin_stories import router as admin_stories_router
+    app.include_router(admin_stories_router, prefix="/api/admin", tags=["admin-stories"])
+except Exception:
+    log_exception(
+        logger,
+        "app.admin_stories_disabled",
+        "Failed to mount admin_stories router — Story Engine admin will be unavailable",
+    )
 # admin_narrator-роутер изолируем: его импорт тянет models.narrator + services
 # narrator_*, которые требуют применённых миграций (narrator_tables, is_admin).
 # Если миграции не накатились / схема рассинхронизирована — импорт упадёт и
@@ -195,8 +234,10 @@ except Exception:
         "Failed to import admin_narrator router — admin panel will be unavailable",
     )
 app.include_router(ws_router, prefix="/ws", tags=["ws"])
-if settings.APP_ENV == "development":
-    app.include_router(dev_router, prefix="/api/dev", tags=["dev"])
+# /api/dev/* — синтетические тест-лобби. Эндпоинты гейтятся
+# require_admin_or_dev_env: в production пускает только админов,
+# в dev/test — любого залогиненного.
+app.include_router(dev_router, prefix="/api/dev", tags=["dev"])
 
 
 @app.get("/")

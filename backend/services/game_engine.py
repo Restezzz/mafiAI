@@ -279,10 +279,19 @@ _ANNOUNCEMENT_GRACE_MS = 150
 
 
 def _wait_seconds_for(announcement: dict | None) -> float:
-    duration_ms = (announcement or {}).get("duration_ms") or 0
-    if duration_ms <= 0:
+    """Сколько ждать после WS-эмита announcement'а до следующего шага.
+
+    Story Engine (этап 3) добавляет ``post_pause_ms`` к каждому cue (тихая
+    пауза между фразами одного narration-step). Legacy путь не задаёт это
+    поле, так что get(..., 0) — backward-compat.
+    """
+    a = announcement or {}
+    duration_ms = a.get("duration_ms") or 0
+    post_pause_ms = a.get("post_pause_ms") or 0
+    if duration_ms <= 0 and post_pause_ms <= 0:
         return 0.0
-    return (duration_ms + _ANNOUNCEMENT_GRACE_MS) / 1000
+    base = duration_ms + _ANNOUNCEMENT_GRACE_MS if duration_ms > 0 else 0
+    return (base + post_pause_ms) / 1000
 
 
 async def _play_phase_announcements(
@@ -572,7 +581,7 @@ async def start_game(db: AsyncSession, session: Session) -> None:
     async def _on_role_reveal_timeout():
         # Запускаем как отдельную фоновую задачу, чтобы не блокировать
         # колбэк таймера собственным await-циклом execute_night_sequence.
-        asyncio.create_task(transition_to_night(session.id, 1))
+        asyncio.create_task(_enter_first_night_or_story(session.id))
 
     await timer_service.start_timer(session.id, "role_reveal", timer_seconds, _on_role_reveal_timeout)
 
@@ -645,7 +654,7 @@ async def acknowledge_role(db: AsyncSession, session: Session, player: Player) -
         # Запускаем переход в ночь как фоновую задачу, чтобы HTTP-handler
         # acknowledge_role завершился моментально, а не держал соединение
         # до конца первой ночи (execute_night_sequence делает долгий await-loop).
-        asyncio.create_task(transition_to_night(session.id, 1))
+        asyncio.create_task(_enter_first_night_or_story(session.id))
     log_event(
         logger,
         logging.INFO,
@@ -658,6 +667,47 @@ async def acknowledge_role(db: AsyncSession, session: Session, player: Player) -
     )
 
     return {"acknowledged": True, "players_acknowledged": acked, "players_total": alive_total}
+
+
+async def _enter_first_night_or_story(session_id: uuid.UUID) -> None:
+    """Compatibility shim: запустить Story Engine, если включён флаг.
+
+    Вызывается вместо прямого ``transition_to_night(session_id, 1)`` после
+    role_reveal'а. Если ``session.story_id`` задан И
+    ``session.settings.use_story_engine`` true — gameplay идёт через
+    ``services.story_runtime``. Иначе — legacy ``transition_to_night``.
+
+    В этапе 7 этот shim удаляется вместе с legacy.
+    """
+    from core.database import async_session_factory
+
+    async with async_session_factory() as db:
+        session = await db.get(Session, session_id)
+        if session is None:
+            return
+        use_story_engine = bool(
+            session.story_id and (session.settings or {}).get("use_story_engine")
+        )
+
+    if use_story_engine:
+        # Локальный импорт: story_runtime может не существовать в legacy
+        # тестовых окружениях (миграция Story Engine не применена).
+        try:
+            from services.story_runtime import start_story
+        except ImportError:
+            log_event(
+                logger,
+                logging.ERROR,
+                "story_engine.import_failed",
+                "use_story_engine=true но services.story_runtime не импортируется — fallback на legacy",
+                session_id=str(session_id),
+            )
+            await transition_to_night(session_id, 1)
+            return
+        await start_story(session_id)
+        return
+
+    await transition_to_night(session_id, 1)
 
 
 async def transition_to_night(session_id: uuid.UUID, phase_number: int):

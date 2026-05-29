@@ -38,6 +38,15 @@ class Session(Base):
     )
     ended_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
+    # Story Engine: какой сюжет используется этой сессией.
+    # NULL = legacy-режим (execute_night_sequence). Когда NOT NULL И
+    # session.settings.use_story_engine == True — gameplay идёт через
+    # services.story_runtime. ON DELETE SET NULL: если сюжет удалили,
+    # сессия не падает, но executor вернётся к legacy-режиму после restart.
+    story_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("stories.id", ondelete="SET NULL"), nullable=True
+    )
+
     # Связи
     host_user: Mapped["User"] = relationship(back_populates="sessions")
     players: Mapped[list["Player"]] = relationship(
@@ -48,4 +57,9 @@ class Session(Base):
     )
     events: Mapped[list["GameEvent"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
+    )
+    # 1:1 с session_story_state. uselist=False обязательно — иначе SQLAlchemy
+    # ждёт list. cascade=all,delete-orphan: удаление сессии гасит state.
+    story_state: Mapped["SessionStoryState | None"] = relationship(
+        back_populates="session", uselist=False, cascade="all, delete-orphan"
     )

@@ -3,6 +3,7 @@ import { useAudioStore } from '../stores/audioStore';
 import type { Announcement, AudioSegment } from '../types/game';
 import { resolvePreloadedAudioUrl } from '../utils/audioPreloader';
 import { serverNow } from '../utils/serverClock';
+import { logger } from '../services/logger';
 
 const HAVE_FUTURE_DATA = 3;
 const PLAYABLE_WAIT_TIMEOUT_MS = 2500;
@@ -59,13 +60,35 @@ export function useNarrationAudio(announcement: Announcement | null) {
 
     if (!announcement) return;
     const segments = resolveSegments(announcement);
+    const startedAtMs = announcement.started_at ? Date.parse(announcement.started_at) : NaN;
+    const nowAtEffect = serverNow();
+    logger.info('narration.audio_effect', 'useNarrationAudio effect run', {
+      key: announcement.key ?? null,
+      stepIndex: announcement.step_index ?? null,
+      stepsTotal: announcement.steps_total ?? null,
+      text: (announcement.text ?? '').slice(0, 40),
+      segmentsCount: segments.length,
+      firstUrl: segments[0]?.url ?? null,
+      firstDurationMs: segments[0]?.duration_ms ?? null,
+      startedAtIso: announcement.started_at ?? null,
+      startedAtMs: Number.isFinite(startedAtMs) ? startedAtMs : null,
+      serverNow: nowAtEffect,
+      elapsedMs: Number.isFinite(startedAtMs) ? nowAtEffect - startedAtMs : null,
+    });
     if (segments.length === 0) return;
 
-    const startedAtMs = announcement.started_at ? Date.parse(announcement.started_at) : NaN;
-
     // Если уже на старте позиция за пределами всех сегментов — ничего не играем.
-    const initial = pickPosition(segments, startedAtMs, serverNow());
-    if (!initial) return;
+    const initial = pickPosition(segments, startedAtMs, nowAtEffect);
+    if (!initial) {
+      logger.warn('narration.audio_skipped_elapsed', 'Audio skipped — server time already past all segments', {
+        key: announcement.key ?? null,
+        stepIndex: announcement.step_index ?? null,
+        startedAtMs: Number.isFinite(startedAtMs) ? startedAtMs : null,
+        serverNow: nowAtEffect,
+        totalDurationMs: segments.reduce((acc, s) => acc + (s.duration_ms || 0), 0),
+      });
+      return;
+    }
 
     const audio = new Audio();
     audio.preload = 'auto';
@@ -231,18 +254,38 @@ export function useNarrationAudio(announcement: Announcement | null) {
           }
         }
         const playPromise = audio.play();
-        if (playPromise && typeof playPromise.catch === 'function') {
-          playPromise.catch((err) => {
-            if (isStale()) return;
-            // AbortError — это нормальный side-effect, когда мы успели
-            // заменить src (drift-skip к следующему сегменту, новый
-            // playFrom от onEnded и т.п.). НЕ показываем gesture-prompt.
-            // NotAllowedError — реальная блокировка autoplay браузером.
-            const name = err && (err as { name?: string }).name;
-            if (name === 'AbortError') return;
-            console.warn('[narration audio] play() rejected, awaiting user gesture:', err);
-            attachGestureRetry();
-          });
+        if (playPromise && typeof playPromise.then === 'function') {
+          playPromise
+            .then(() => {
+              if (isStale()) return;
+              logger.info('narration.audio_playing', 'Audio play() resolved', {
+                key: announcementKey,
+                idx,
+                url: segments[idx]?.url ?? null,
+              });
+            })
+            .catch((err) => {
+              if (isStale()) return;
+              // AbortError — это нормальный side-effect, когда мы успели
+              // заменить src (drift-skip к следующему сегменту, новый
+              // playFrom от onEnded и т.п.). НЕ показываем gesture-prompt.
+              // NotAllowedError — реальная блокировка autoplay браузером.
+              const name = err && (err as { name?: string }).name;
+              if (name === 'AbortError') {
+                logger.info('narration.audio_aborted', 'Audio play() aborted (src replaced)', {
+                  key: announcementKey,
+                  idx,
+                });
+                return;
+              }
+              logger.warn('narration.audio_play_rejected', 'Audio play() rejected — awaiting user gesture', {
+                key: announcementKey,
+                idx,
+                errName: name ?? null,
+                errMessage: err && (err as { message?: string }).message,
+              });
+              attachGestureRetry();
+            });
         }
         startDriftLoop();
       };
@@ -253,7 +296,22 @@ export function useNarrationAudio(announcement: Announcement | null) {
         if (isStale()) return;
         seekAndPlay();
       };
+      const onLoadError = () => {
+        if (isStale()) return;
+        const mediaErr = audio.error;
+        logger.error('narration.audio_load_error', 'Audio element failed to load src', {
+          key: announcementKey,
+          idx,
+          rawUrl: segments[idx]?.url ?? null,
+          resolvedSrc: audio.src,
+          mediaErrorCode: mediaErr?.code ?? null,
+          mediaErrorMessage: mediaErr?.message ?? null,
+          networkState: audio.networkState,
+          readyState: audio.readyState,
+        });
+      };
       audio.addEventListener('loadedmetadata', onMetaLoaded, { once: true });
+      audio.addEventListener('error', onLoadError, { once: true });
       audio.load();
     };
 

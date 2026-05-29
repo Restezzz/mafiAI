@@ -109,13 +109,19 @@ async def build_session_detail_response(
         )
         for p in sorted(session.players, key=lambda x: x.join_order)
     ]
+    # story_id хранится в FK-колонке (не в jsonb settings), но фронт
+    # ожидает его в settings — мержим для response.
+    merged_settings = {**(session.settings or {})}
+    if session.story_id is not None:
+        merged_settings["story_id"] = str(session.story_id)
+
     return SessionDetailResponse(
         id=str(session.id),
         code=session.code,
         host_user_id=str(session.host_user_id),
         player_count=session.player_count,
         status=session.status,
-        settings=session.settings,
+        settings=merged_settings,
         players=players,
         created_at=session.created_at.isoformat() if session.created_at else "",
         dev_lobby=await build_dev_lobby_info(db, session, current_user_id),

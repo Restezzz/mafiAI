@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from pydantic import BaseModel, Field, field_validator
 
 from schemas.validators import strip_name_value
@@ -144,3 +146,17 @@ class UpdateSettingsRequest(BaseModel):
     voting_timer_seconds: int | None = Field(default=None, ge=15, le=120)
     night_action_timer_seconds: int | None = Field(default=None, ge=15, le=60)
     role_config: RoleConfig | None = None
+    # Story Engine (опц., этап 2.6):
+    # - story_id: UUID сюжета. None отключает Story Engine для этой сессии.
+    # - use_story_engine: при true gameplay идёт через services.story_runtime
+    #   (см. game_engine._enter_first_night_or_story). При false (или null) —
+    #   legacy путь. Дефолт false на проде до этапа 7.
+    story_id: uuid.UUID | None = None
+    use_story_engine: bool | None = None
+    # Story Engine pre-game overrides (этап 3). Накладываются поверх
+    # story.settings (StorySettings.timer_multiplier_default,
+    # inter_cue_pause_seconds). None означает «использовать дефолт сюжета».
+    # CHECK-диапазоны совпадают с теми, что в StorySettings (см.
+    # models/story.py).
+    timer_multiplier: float | None = Field(default=None, ge=0.5, le=2.0)
+    inter_cue_pause_seconds: float | None = Field(default=None, ge=0.0, le=60.0)

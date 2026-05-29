@@ -9,8 +9,8 @@ from __future__ import annotations
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, Response, UploadFile, status
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -24,6 +24,7 @@ from models.narrator import (
     NarratorTrigger,
     NarratorVariant,
 )
+from models.story import Story
 from models.user import User
 from schemas.narrator import (
     AudioFileResponse,
@@ -90,6 +91,7 @@ def _serialize_variant(v: NarratorVariant) -> VariantResponse:
         id=str(v.id),
         audio_file_id=str(v.audio_file_id) if v.audio_file_id else None,
         audio_url=_audio_url(v.audio_file),
+        audio_filename=v.audio_file.filename if v.audio_file else None,
         text=v.text,
         duration_ms=v.duration_ms,
         sort_order=v.sort_order,
@@ -121,6 +123,7 @@ def _serialize_trigger(t: NarratorTrigger) -> TriggerResponse:
     return TriggerResponse(
         id=str(t.id),
         slug=t.slug,
+        story_id=str(t.story_id) if t.story_id else None,
         group_key=t.group_key,
         label=t.label,
         description=t.description,
@@ -150,10 +153,26 @@ def _serialize_name_asset(n: NarratorNameAsset) -> NameAssetResponse:
 
 @router.get("/triggers", response_model=TriggersListResponse)
 async def list_triggers(
+    story_id: uuid.UUID | None = Query(
+        default=None,
+        description="Фильтр по сюжету. Без включенного include_global возвращает только триггеры этого сюжета.",
+    ),
+    include_global: bool = Query(
+        default=False,
+        description="Если True и задан story_id — в ответе также будут global-триггеры (story_id IS NULL).",
+    ),
     _admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> TriggersListResponse:
-    """Список всех триггеров с variants и composite_templates.
+    """Список триггеров с variants и composite_templates.
+
+    Комбинации фильтров (story-scoped triggers, этап 6.6):
+    - без параметров → все триггеры (легаси поведение).
+    - ``?story_id=X`` → только триггеры этого сюжета.
+    - ``?story_id=X&include_global=true`` → триггеры этого сюжета
+      + global (story_id IS NULL). Этот вариант использует
+      CueListEditor при ``Story.use_only_own_triggers=False``.
+    - ``?include_global=true`` (без story_id) → только global.
 
     Eager-load всю иерархию (variants -> audio_file, templates -> segments -> audio_file)
     одним запросом через selectinload — N+1 был бы убийствен для админ-страницы.
@@ -168,6 +187,18 @@ async def list_triggers(
         )
         .order_by(NarratorTrigger.group_key, NarratorTrigger.slug)
     )
+    if story_id is not None and include_global:
+        stmt = stmt.where(
+            or_(
+                NarratorTrigger.story_id == story_id,
+                NarratorTrigger.story_id.is_(None),
+            )
+        )
+    elif story_id is not None:
+        stmt = stmt.where(NarratorTrigger.story_id == story_id)
+    elif include_global:
+        stmt = stmt.where(NarratorTrigger.story_id.is_(None))
+
     triggers = (await db.scalars(stmt)).all()
     return TriggersListResponse(triggers=[_serialize_trigger(t) for t in triggers])
 
@@ -228,20 +259,48 @@ async def create_trigger(
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> TriggerResponse:
-    """Создаёт новый триггер. ``slug`` должен быть уникальным."""
+    """Создаёт новый триггер.
+
+    Скоуп-ориентированная уникальность slug:
+    - ``story_id=None`` (global): проверяем что нет другого
+      global-триггера с таким же slug.
+    - ``story_id=<uuid>``: проверяем что такой сюжет существует
+      и в нём нет другого триггера с таким же slug.
+      Столкнуть global с story-scoped slug='foo' можно — это
+      разрешёно по дизайну (сюжет затеняет global).
+    """
+    story_uuid: uuid.UUID | None = None
+    if payload.story_id:
+        try:
+            story_uuid = uuid.UUID(payload.story_id)
+        except ValueError as exc:
+            raise GameError(400, "invalid_story_id", "story_id должен быть UUID") from exc
+        story_exists = await db.scalar(
+            select(Story.id).where(Story.id == story_uuid)
+        )
+        if story_exists is None:
+            raise GameError(404, "story_not_found", "Сюжет не найден")
+
     existing = await db.scalar(
-        select(NarratorTrigger).where(NarratorTrigger.slug == payload.slug)
+        select(NarratorTrigger).where(
+            NarratorTrigger.slug == payload.slug,
+            NarratorTrigger.story_id.is_(None)
+            if story_uuid is None
+            else NarratorTrigger.story_id == story_uuid,
+        )
     )
     if existing is not None:
+        scope_msg = "в этом сюжете" if story_uuid else "в global-namespace"
         raise GameError(
             409,
             "trigger_slug_conflict",
-            f"Триггер со slug {payload.slug!r} уже существует",
+            f"Триггер со slug {payload.slug!r} уже существует {scope_msg}",
         )
 
     trigger = NarratorTrigger(
         id=uuid.uuid4(),
         slug=payload.slug,
+        story_id=story_uuid,
         group_key=payload.group_key,
         label=payload.label,
         description=payload.description,
@@ -250,9 +309,10 @@ async def create_trigger(
     db.add(trigger)
     await db.commit()
     logger.info(
-        "narrator.trigger.created slug=%s kind=%s by_user=%s",
+        "narrator.trigger.created slug=%s kind=%s story_id=%s by_user=%s",
         payload.slug,
         payload.kind,
+        story_uuid,
         admin.id,
     )
     return _serialize_trigger(await _load_trigger_with_children(db, trigger.id))
@@ -748,10 +808,17 @@ async def list_audio_files(
     return AudioFilesListResponse(audio_files=[_serialize_audio_file(f) for f in files])
 
 
-# Whitelist content-types для multipart upload. ``audio/mp3`` некоторые
-# браузеры отдают вместо стандартного ``audio/mpeg`` (см. MDN).
-_ALLOWED_MP3_CONTENT_TYPES = {"audio/mpeg", "audio/mp3", "application/octet-stream"}
-# Максимальный размер mp3 (10 MB) — narrator-фразы короткие, защищаем диск.
+# Whitelist content-types для multipart upload.
+# Поддерживаем mp3, wav, ogg, flac, m4a и generic fallback.
+_ALLOWED_AUDIO_CONTENT_TYPES = {
+    "audio/mpeg", "audio/mp3",          # mp3
+    "audio/wav", "audio/x-wav", "audio/wave",  # wav
+    "audio/ogg", "audio/vorbis",        # ogg
+    "audio/flac", "audio/x-flac",       # flac
+    "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/aac",  # m4a/aac
+    "application/octet-stream",         # generic fallback
+}
+# Максимальный размер аудио (10 MB) — narrator-фразы короткие, защищаем диск.
 _MAX_MP3_BYTES = 10 * 1024 * 1024
 
 
@@ -773,8 +840,8 @@ async def upload_audio_file(
     """
     if file.filename is None:
         raise GameError(400, "filename_missing", "Не указано имя файла")
-    if file.content_type not in _ALLOWED_MP3_CONTENT_TYPES:
-        raise GameError(415, "unsupported_media_type", f"Ожидается mp3, получено {file.content_type!r}")
+    if file.content_type not in _ALLOWED_AUDIO_CONTENT_TYPES:
+        raise GameError(415, "unsupported_media_type", f"Ожидается аудио файл, получено {file.content_type!r}")
 
     filename = file.filename.strip()
     if not filename:

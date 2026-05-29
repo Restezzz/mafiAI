@@ -1,4 +1,5 @@
 import audioManifest from '../data/audioManifest.json';
+import { API_BASE_URL } from './constants';
 
 type ManifestName = {
   intro_audio?: string;
@@ -78,7 +79,19 @@ export function getAudioPreloadProgress(): AudioPreloadProgress {
 }
 
 export function resolvePreloadedAudioUrl(url: string): string {
-  return blobUrls.get(url) ?? url;
+  const blob = blobUrls.get(url);
+  if (blob) return blob;
+  // Не предзагруженный файл (story-scoped озвучка из админки, напр.
+  // /audio/uploads/<uuid>.mp3 — её нет в audioManifest.json). Относительный
+  // /audio/... резолвится против origin фронта (CRA dev :3000 / frontend-nginx),
+  // где лежат ТОЛЬКО seed-файлы из public/audio. Загруженные через админку файлы
+  // живут в backend storage (/app/audio_storage) и отдаются бэкендом на /audio/*.
+  // Префиксуем API_BASE_URL — ровно как админский AudioPlayer (audio-элемент
+  // умеет играть cross-origin без CORS). Без этого uploads/ давали 404 и тишину.
+  if (url.startsWith('/audio/')) {
+    return `${API_BASE_URL}${url}`;
+  }
+  return url;
 }
 
 export function subscribeAudioPreload(listener: (progress: AudioPreloadProgress) => void): () => void {
