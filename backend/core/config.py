@@ -14,6 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # config.py лежит в backend/core/, поэтому parents[2] = AI-GameMaster/.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_AUDIO_STORAGE = _REPO_ROOT / "backend" / "audio_storage"
+_DEFAULT_IMAGE_STORAGE = _REPO_ROOT / "backend" / "image_storage"
 
 
 def _parse_json_list(value: Any) -> list[str]:
@@ -73,6 +74,10 @@ class Settings(BaseSettings):
     # В production монтируется как Docker volume чтобы пережить рестарты.
     AUDIO_STORAGE_ROOT: str = Field(default=str(_DEFAULT_AUDIO_STORAGE))
 
+    # Хранилище загруженных картинок (карточки ролей, обложки сюжетов).
+    # Раздаётся StaticFiles на /images/*. В production — Docker volume.
+    IMAGE_STORAGE_ROOT: str = Field(default=str(_DEFAULT_IMAGE_STORAGE))
+
     @property
     def cors_origins(self) -> list[str]:
         return _parse_json_list(self.CORS_ORIGINS)
@@ -80,6 +85,10 @@ class Settings(BaseSettings):
     @property
     def audio_storage_path(self) -> Path:
         return Path(self.AUDIO_STORAGE_ROOT).expanduser().resolve()
+
+    @property
+    def image_storage_path(self) -> Path:
+        return Path(self.IMAGE_STORAGE_ROOT).expanduser().resolve()
 
 
 # Дефолтный SECRET_KEY из .env.example — байтово сравниваем, чтобы

@@ -26,6 +26,9 @@ export const gameApi = {
     return httpClient.post<VoteResponse>(`/sessions/${sessionId}/vote`, body);
   },
 
+  storyVote: (sessionId: string, story_id: string) =>
+    httpClient.post<{ status: string }>(`/sessions/${sessionId}/story-vote`, { story_id }),
+
   getState: (sessionId: string) =>
     httpClient.get<GameStateResponse>(`/sessions/${sessionId}/state`),
 

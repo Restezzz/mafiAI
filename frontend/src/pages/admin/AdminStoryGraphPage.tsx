@@ -813,8 +813,10 @@ function StoryGraphInner() {
           <StepEditPanel
             storyId={storyId}
             step={editingStep}
+            story={story}
             onClose={() => setEditingStep(null)}
             onStepUpdated={handleStepUpdated}
+            onStoryChanged={fetchStory}
           />
         ) : editingTransition && storyId && story ? (
           <EdgeEditPanel

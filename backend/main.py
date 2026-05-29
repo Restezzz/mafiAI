@@ -102,6 +102,23 @@ except Exception:
         audio_storage_root=str(settings.AUDIO_STORAGE_ROOT),
     )
 
+# Mount хранилища картинок (карточки ролей, обложки сюжетов). Та же
+# fail-soft логика, что и для /audio.
+try:
+    settings.image_storage_path.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        "/images",
+        StaticFiles(directory=str(settings.image_storage_path)),
+        name="story_images",
+    )
+except Exception:
+    log_exception(
+        logger,
+        "app.images_mount_failed",
+        "Failed to mount /images StaticFiles — story images will be unavailable",
+        image_storage_root=str(settings.IMAGE_STORAGE_ROOT),
+    )
+
 # Rate limiter: ставим до CORS и логирования, чтобы 429 уходил без полной обработки.
 # Лимиты per-route задаются декоратором @limiter.limit(...) в роутерах.
 app.state.limiter = limiter

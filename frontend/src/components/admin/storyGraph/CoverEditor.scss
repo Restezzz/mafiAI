@@ -1,0 +1,45 @@
+.cover-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+
+  &__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__stage {
+    position: relative;
+    width: 100%;
+    user-select: none;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #14161c;
+    touch-action: none;
+  }
+
+  &__img {
+    display: block;
+    width: 100%;
+    height: auto;
+    pointer-events: none;
+  }
+
+  &__crop {
+    position: absolute;
+    border: 2px solid #e2b04a;
+    cursor: move;
+    background: transparent;
+    outline: 1px solid rgba(255, 255, 255, 0.4);
+
+    // Затемняем всё ВНЕ рамки большой тенью (стандартный crop-приём).
+    &::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.5);
+      pointer-events: none;
+    }
+  }
+}

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Role, Player, Target, Announcement, VoteInfo, GameResult, Phase, SessionSettings } from '../types/game';
+import { Role, Player, Target, Announcement, VoteInfo, GameResult, Phase, SessionSettings, StoryVoteInfo, StoryVoteCard } from '../types/game';
 import type { AcknowledgeRoleResponse, GameStateResponse, NightActionCheckResult } from '../types/api';
 import { gameApi } from '../api/gameApi';
 import { useSessionStore } from './sessionStore';
@@ -14,6 +14,7 @@ export type GameScreen =
   | 'day_discussion'
   | 'day_voting'
   | 'eliminated'
+  | 'story_vote'
   | 'finale';
 
 export type NightActionType =
@@ -63,6 +64,12 @@ type PhasePayload = {
   action_type?: NightActionType | null;
   available_targets?: Target[] | null;
   announcement?: Announcement | null;
+  stories?: StoryVoteCard[];
+};
+type StoryVoteUpdatePayload = {
+  counts?: Record<string, number>;
+  voted?: number;
+  alive_total?: number;
 };
 type ActionRequiredPayload = {
   action_type?: NightActionType | null;
@@ -158,6 +165,11 @@ interface GameState {
   voteCounts: Record<string, number>;
   dayBlockedPlayer: string | null;
 
+  // Story vote (фича 3)
+  storyVote: StoryVoteInfo | null;
+  storyVoteSubmitted: boolean;
+  storyVoteTarget: string | null;
+
   // Finale
   result: GameResult | null;
 
@@ -165,6 +177,8 @@ interface GameState {
   loadState: (sessionId: string) => Promise<void>;
   submitNightAction: (targetId: string) => Promise<void>;
   submitVote: (targetId: string | null) => Promise<void>;
+  submitStoryVote: (storyId: string) => Promise<void>;
+  applyStoryVoteUpdate: (payload: StoryVoteUpdatePayload) => void;
   acknowledgeRole: () => Promise<void>;
 
   // Plain setters (still used by screen-local logic)
@@ -218,6 +232,7 @@ function deriveScreen(
     if (subPhase === 'voting') return 'day_voting';
     return 'day_discussion';
   }
+  if (phaseType === 'story_vote') return 'story_vote';
   return 'role_reveal';
 }
 
@@ -379,6 +394,9 @@ const initialState = {
   voteTarget: null,
   voteCounts: {},
   dayBlockedPlayer: null,
+  storyVote: null,
+  storyVoteSubmitted: false,
+  storyVoteTarget: null,
   result: null,
 };
 
@@ -433,6 +451,9 @@ export const useGameStore = create<GameState>((set, get) => ({
         voteSubmitted: data.my_vote_submitted || state.voteSubmitted,
         votes: data.votes ?? null,
         dayBlockedPlayer: data.day_blocked_player ?? null,
+        storyVote: data.story_vote ?? (phase?.type === 'story_vote' ? state.storyVote : null),
+        storyVoteSubmitted: data.story_vote?.my_vote != null || (phase?.type === 'story_vote' ? state.storyVoteSubmitted : false),
+        storyVoteTarget: data.story_vote?.my_vote ?? (phase?.type === 'story_vote' ? state.storyVoteTarget : null),
         // Не затираем финальный result при re-sync: /state не возвращает
         // result, но в памяти он уже мог быть установлен через WS game_finished.
         result: data.result ?? state.result ?? null,
@@ -476,6 +497,31 @@ export const useGameStore = create<GameState>((set, get) => ({
       sessionId: state.sessionId,
       targetId,
     }, { sessionId: state.sessionId });
+  },
+
+  submitStoryVote: async (storyId) => {
+    const state = get();
+    if (!state.sessionId) return;
+    await gameApi.storyVote(state.sessionId, storyId);
+    set({ storyVoteSubmitted: true, storyVoteTarget: storyId });
+    logger.info('game.story_vote_submit', 'Story vote submitted', {
+      sessionId: state.sessionId,
+      storyId,
+    }, { sessionId: state.sessionId });
+  },
+
+  applyStoryVoteUpdate: (payload) => {
+    set((state) => {
+      if (!state.storyVote) return state;
+      return {
+        storyVote: {
+          ...state.storyVote,
+          counts: payload.counts ?? state.storyVote.counts,
+          voted: payload.voted ?? state.storyVote.voted,
+          alive_total: payload.alive_total ?? state.storyVote.alive_total,
+        },
+      };
+    });
   },
 
   acknowledgeRole: async () => {
@@ -632,6 +678,18 @@ export const useGameStore = create<GameState>((set, get) => ({
           phase?.type === 'day' && phase?.sub_phase === 'voting' ? {} : state.voteCounts,
         nightNumber: phase?.type === 'night' ? phase.number : state.nightNumber,
         dayNumber: phase?.type === 'day' ? phase.number : state.dayNumber,
+        storyVote:
+          phase?.type === 'story_vote'
+            ? {
+                stories: phasePayload.stories ?? state.storyVote?.stories ?? [],
+                counts: state.storyVote?.counts ?? {},
+                voted: state.storyVote?.voted ?? 0,
+                alive_total: state.storyVote?.alive_total ?? 0,
+                my_vote: state.storyVote?.my_vote ?? null,
+              }
+            : state.storyVote,
+        storyVoteSubmitted: phase?.type === 'story_vote' ? state.storyVoteSubmitted : false,
+        storyVoteTarget: phase?.type === 'story_vote' ? state.storyVoteTarget : null,
       };
     });
   },

@@ -26,6 +26,8 @@ export interface StoryNarrationCue {
   pause_after_ms: number;
   override_text: string | null;
   override_duration_ms: number | null;
+  // Фича 1: ключ варианта произношения имени, вставляемого между фразами.
+  name_variant_key: string | null;
 }
 
 export type StoryStepKind =
@@ -37,7 +39,68 @@ export type StoryStepKind =
   | 'day_resolve'
   | 'pause'
   | 'branch'
-  | 'end';
+  | 'end'
+  | 'names'
+  | 'roles';
+
+// ============================================================================
+// Images / cover crop (фичи 2, 3)
+// ============================================================================
+
+export interface ImageRead {
+  id: string;
+  url: string;
+  width: number | null;
+  height: number | null;
+  size_bytes: number;
+}
+
+export interface CoverCrop {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+// ============================================================================
+// Name variants (фича 1)
+// ============================================================================
+
+export interface StoryNameVariantAsset {
+  name_asset_id: string;
+  display_name: string;
+  audio_file_id: string | null;
+  audio_url: string | null;
+  audio_filename: string | null;
+}
+
+export interface StoryNameVariant {
+  id: string;
+  key: string;
+  label: string;
+  sort_order: number;
+  assets: StoryNameVariantAsset[];
+}
+
+// ============================================================================
+// Role overrides (фича 2)
+// ============================================================================
+
+export interface RoleCatalogItem {
+  slug: string;
+  name: string;
+  team: string;
+}
+
+export interface StoryRoleOverride {
+  id: string;
+  role_slug: string;
+  display_name: string | null;
+  card_front_image_id: string | null;
+  card_front_url: string | null;
+  card_back_image_id: string | null;
+  card_back_url: string | null;
+}
 
 export interface StoryStep {
   id: string;
@@ -102,6 +165,13 @@ export interface StoryReadFull {
   settings: StorySettings | null;
   steps: StoryStep[];
   transitions: StoryTransition[];
+  // Фича 3: обложка сюжета для голосования.
+  cover_image_id: string | null;
+  cover_url: string | null;
+  cover_crop: CoverCrop | null;
+  // Фичи 1, 2: варианты имён и переопределения ролей.
+  name_variants: StoryNameVariant[];
+  role_overrides: StoryRoleOverride[];
 }
 
 // ============================================================================
@@ -113,6 +183,8 @@ export interface StoryCreatePayload {
   name: string;
   description?: string;
   settings?: Partial<StorySettings>;
+  cover_image_id?: string | null;
+  cover_crop?: CoverCrop | null;
 }
 
 export interface StoryUpdatePayload {
@@ -122,6 +194,41 @@ export interface StoryUpdatePayload {
   is_obsolete?: boolean;
   use_only_own_triggers?: boolean;
   entry_step_id?: string;
+  cover_image_id?: string | null;
+  cover_crop?: CoverCrop | null;
+  unset_cover?: boolean;
+}
+
+export interface StoryNameVariantCreatePayload {
+  key: string;
+  label?: string;
+  sort_order?: number;
+}
+
+export interface StoryNameVariantUpdatePayload {
+  label?: string;
+  sort_order?: number;
+}
+
+export interface StoryNameVariantAssetUpdatePayload {
+  audio_file_id?: string | null;
+  unset_audio?: boolean;
+}
+
+export interface StoryRoleOverrideCreatePayload {
+  role_slug: string;
+  display_name?: string | null;
+  card_front_image_id?: string | null;
+  card_back_image_id?: string | null;
+}
+
+export interface StoryRoleOverrideUpdatePayload {
+  display_name?: string | null;
+  unset_display_name?: boolean;
+  card_front_image_id?: string | null;
+  unset_card_front?: boolean;
+  card_back_image_id?: string | null;
+  unset_card_back?: boolean;
 }
 
 export interface StoryStepCreatePayload {
@@ -164,6 +271,7 @@ export interface StoryNarrationCueCreatePayload {
   pause_after_ms?: number;
   override_text?: string | null;
   override_duration_ms?: number | null;
+  name_variant_key?: string | null;
 }
 
 export interface StoryNarrationCueUpdatePayload {
@@ -174,6 +282,8 @@ export interface StoryNarrationCueUpdatePayload {
   pause_after_ms?: number;
   override_text?: string | null;
   override_duration_ms?: number | null;
+  name_variant_key?: string | null;
+  unset_name_variant?: boolean;
 }
 
 // ============================================================================
@@ -250,6 +360,57 @@ export const adminStoriesApi = {
       `${BASE}/${storyId}/steps/${stepId}/cues/reorder`,
       { cue_ids: cueIds },
     ),
+
+  // Images (фичи 2, 3)
+  uploadImage: (file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return httpClient.post<ImageRead>(`/admin/images`, fd);
+  },
+  listImages: () => httpClient.get<{ images: ImageRead[] }>(`/admin/images`),
+  deleteImage: (imageId: string) =>
+    httpClient.delete<void>(`/admin/images/${imageId}`),
+
+  // Name variants (фича 1)
+  createNameVariant: (storyId: string, payload: StoryNameVariantCreatePayload) =>
+    httpClient.post<StoryNameVariant>(`${BASE}/${storyId}/name-variants`, payload),
+  updateNameVariant: (
+    storyId: string,
+    variantId: string,
+    payload: StoryNameVariantUpdatePayload,
+  ) =>
+    httpClient.put<StoryNameVariant>(
+      `${BASE}/${storyId}/name-variants/${variantId}`,
+      payload,
+    ),
+  deleteNameVariant: (storyId: string, variantId: string) =>
+    httpClient.delete<void>(`${BASE}/${storyId}/name-variants/${variantId}`),
+  setNameVariantAsset: (
+    storyId: string,
+    variantId: string,
+    nameAssetId: string,
+    payload: StoryNameVariantAssetUpdatePayload,
+  ) =>
+    httpClient.put<StoryNameVariantAsset>(
+      `${BASE}/${storyId}/name-variants/${variantId}/assets/${nameAssetId}`,
+      payload,
+    ),
+
+  // Role overrides (фича 2)
+  listRoles: () => httpClient.get<{ roles: RoleCatalogItem[] }>(`/admin/roles`),
+  createRoleOverride: (storyId: string, payload: StoryRoleOverrideCreatePayload) =>
+    httpClient.post<StoryRoleOverride>(`${BASE}/${storyId}/role-overrides`, payload),
+  updateRoleOverride: (
+    storyId: string,
+    overrideId: string,
+    payload: StoryRoleOverrideUpdatePayload,
+  ) =>
+    httpClient.put<StoryRoleOverride>(
+      `${BASE}/${storyId}/role-overrides/${overrideId}`,
+      payload,
+    ),
+  deleteRoleOverride: (storyId: string, overrideId: string) =>
+    httpClient.delete<void>(`${BASE}/${storyId}/role-overrides/${overrideId}`),
 
   // Export / Import
   export: (id: string) => httpClient.get<unknown>(`${BASE}/${id}/export`),

@@ -96,6 +96,17 @@ export default function StorySelectionPage() {
     navigate(`/game/${session.id}`);
   }, [myRole, isHost, session, navigate]);
 
+  // Новый сюжетный движок: после gameApi.start запускается фаза голосования
+  // за сюжет (phase_changed → screen='story_vote'). Все клиенты переходят в
+  // игру, чтобы увидеть экран голосования (роли ещё не розданы, role_assigned
+  // придёт только после резолва голосования).
+  const gameScreen = useGameStore((s) => s.screen);
+  useEffect(() => {
+    if (gameScreen !== 'story_vote' || !session || navigatingRef.current) return;
+    navigatingRef.current = true;
+    navigate(`/game/${session.id}`);
+  }, [gameScreen, session, navigate]);
+
   // Авто-переход из фазы показа сюжета в выбор имени.
   useEffect(() => {
     if (phase !== 'story') return;

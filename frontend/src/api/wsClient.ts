@@ -193,6 +193,21 @@ const HANDLERS: Record<string, (payload: unknown) => void> = {
     }
   },
 
+  story_vote_update: (payload) => {
+    if (isPayloadRecord(payload)) {
+      useGameStore.getState().applyStoryVoteUpdate(payload as {
+        counts?: Record<string, number>;
+        voted?: number;
+        alive_total?: number;
+      });
+    }
+  },
+
+  story_vote_result: () => {
+    // Победитель зафиксирован на бэке; переход в role_reveal придёт
+    // отдельным событием game_started. Здесь ничего делать не нужно.
+  },
+
   vote_result: (payload) => {
     if (isPayloadRecord(payload)) {
       useGameStore.getState().applyVoteResult(payload);

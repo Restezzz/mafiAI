@@ -26,7 +26,11 @@ from models.story import (
     StoryStep,
     StoryNarrationCue,
     StoryTransition,
+    StoryNameVariant,
+    StoryNameVariantAsset,
+    StoryRoleOverride,
 )
+from models.image import ImageFile
 from models.session_story_state import SessionStoryState
 
 __all__ = [
@@ -53,5 +57,9 @@ __all__ = [
     "StoryStep",
     "StoryNarrationCue",
     "StoryTransition",
+    "StoryNameVariant",
+    "StoryNameVariantAsset",
+    "StoryRoleOverride",
+    "ImageFile",
     "SessionStoryState",
 ]

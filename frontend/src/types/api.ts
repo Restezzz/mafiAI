@@ -11,6 +11,7 @@ import {
   GameResult,
   RoleConfig,
   DevLobbyInfo,
+  StoryVoteInfo,
 } from './game';
 
 // ---- Auth ----
@@ -162,8 +163,8 @@ export interface ActivateDevPlayerResponse {
 export interface StartSessionResponse {
   status: 'active';
   phase: {
-    type: 'role_reveal';
-    number: 0;
+    type: 'role_reveal' | 'story_vote';
+    number: number;
   };
 }
 
@@ -190,6 +191,7 @@ export interface GameStateResponse {
   };
   players: Player[];
   role_reveal: RoleRevealInfo | null;
+  story_vote?: StoryVoteInfo | null;
   awaiting_action: boolean;
   action_type: Exclude<ActionType, 'vote'> | null;
   available_targets: Target[] | null;

@@ -26,3 +26,10 @@ class VoteRequest(BaseModel):
 
     target_player_id: uuid.UUID | None = None
 
+
+class StoryVoteRequest(BaseModel):
+    """Тело запроса POST /sessions/{id}/story-vote (Фича 3)."""
+    model_config = ConfigDict(extra="forbid")
+
+    story_id: uuid.UUID
+

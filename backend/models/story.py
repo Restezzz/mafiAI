@@ -39,7 +39,8 @@ from core.database import Base
 
 
 if TYPE_CHECKING:
-    from models.narrator import NarratorTrigger
+    from models.narrator import NarratorTrigger, NarratorAudioFile, NarratorNameAsset
+    from models.image import ImageFile
 
 
 # Допустимые виды шагов. Перечислены тут, потому что используется в
@@ -55,7 +56,13 @@ STORY_STEP_KINDS = (
     "pause",           # фиксированная пауза (seconds в payload)
     "branch",          # no-op, выбор edge по condition
     "end",             # финал игры
+    "names",           # нода имён: варианты произношения имён + их mp3
+    "roles",           # нода ролей: переопределение визуала (имя + карточки)
 )
+
+# Строка для CHECK-констрейнта (повторяется в миграции). Держим в одном месте,
+# чтобы синхронизировать модель и DDL.
+_STORY_STEP_KINDS_SQL = ", ".join(f"'{k}'" for k in STORY_STEP_KINDS)
 
 
 class Story(Base):
@@ -110,6 +117,16 @@ class Story(Base):
         ForeignKey("stories.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Обложка сюжета для экрана голосования (фича 3). NULL = нет обложки.
+    cover_image_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("image_files.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # Прямоугольник кадрирования обложки под рамку карточки. JSONB
+    # {"x": .., "y": .., "w": .., "h": ..} в долях [0..1] от оригинала.
+    # NULL = показывать оригинал целиком (object-fit: cover).
+    cover_crop: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     entry_step_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("story_steps.id", ondelete="SET NULL", use_alter=True),
@@ -147,6 +164,17 @@ class Story(Base):
         "Story",
         remote_side="Story.id",
         foreign_keys=[superseded_by_id],
+    )
+    cover_image: Mapped["ImageFile | None"] = relationship(foreign_keys=[cover_image_id])
+    name_variants: Mapped[list["StoryNameVariant"]] = relationship(
+        back_populates="story",
+        cascade="all, delete-orphan",
+        order_by="StoryNameVariant.sort_order",
+    )
+    role_overrides: Mapped[list["StoryRoleOverride"]] = relationship(
+        back_populates="story",
+        cascade="all, delete-orphan",
+        order_by="StoryRoleOverride.role_slug",
     )
 
 
@@ -210,8 +238,7 @@ class StoryStep(Base):
     __table_args__ = (
         UniqueConstraint("story_id", "slug", name="uq_story_steps_story_slug"),
         CheckConstraint(
-            "kind IN ('narration', 'role_action', 'discussion', 'voting', "
-            "'night_resolve', 'day_resolve', 'pause', 'branch', 'end')",
+            f"kind IN ({_STORY_STEP_KINDS_SQL})",
             name="ck_story_steps_kind",
         ),
     )
@@ -312,6 +339,12 @@ class StoryNarrationCue(Base):
     # narrator_variants.duration_ms или estimate по тексту. Используется
     # для text-only cues (без trigger), или чтобы растянуть/сжать показ.
     override_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Фича 1: какой вариант произношения имени игрока использовать при
+    # инъекции имени между фразами (composite/name_pair). Ссылается на
+    # StoryNameVariant.key этого же сюжета. NULL = дефолтное аудио имени
+    # (narrator_name_assets.audio_file). Если ключа нет среди вариантов
+    # сюжета на runtime — тихий fallback на дефолт.
+    name_variant_key: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
     step: Mapped["StoryStep"] = relationship(back_populates="cues")
     trigger: Mapped["NarratorTrigger | None"] = relationship(foreign_keys=[trigger_id])
@@ -376,4 +409,156 @@ class StoryTransition(Base):
     to_step: Mapped["StoryStep"] = relationship(
         back_populates="incoming_transitions",
         foreign_keys=[to_step_id],
+    )
+
+
+class StoryNameVariant(Base):
+    """Вариант произношения имён (фича 1).
+
+    ``key`` — доп-id варианта (например ``voting``). Один на сюжет (UNIQUE
+    story_id+key). Для каждого имени из глобального каталога
+    ``narrator_name_assets`` админ может загрузить mp3 этого варианта —
+    запись ``StoryNameVariantAsset``.
+
+    Когда в narration-cue выбран ``name_variant_key == key``, runtime при
+    озвучке имени игрока подставляет mp3 варианта вместо дефолтного.
+    """
+
+    __tablename__ = "story_name_variants"
+    __table_args__ = (
+        UniqueConstraint("story_id", "key", name="uq_story_name_variants_story_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    story_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("stories.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key: Mapped[str] = mapped_column(String(40), nullable=False)
+    label: Mapped[str] = mapped_column(String(120), nullable=False, server_default="")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    story: Mapped["Story"] = relationship(back_populates="name_variants")
+    assets: Mapped[list["StoryNameVariantAsset"]] = relationship(
+        back_populates="variant",
+        cascade="all, delete-orphan",
+    )
+
+
+class StoryNameVariantAsset(Base):
+    """mp3 конкретного имени для конкретного варианта (фича 1).
+
+    Связывает ``StoryNameVariant`` с именем из ``narrator_name_assets`` и
+    аудио-файлом. UNIQUE (variant_id, name_asset_id) — одно аудио на пару.
+    """
+
+    __tablename__ = "story_name_variant_assets"
+    __table_args__ = (
+        UniqueConstraint(
+            "variant_id", "name_asset_id", name="uq_story_name_variant_assets_pair"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    variant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("story_name_variants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name_asset_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("narrator_name_assets.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    audio_file_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("narrator_audio_files.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    variant: Mapped["StoryNameVariant"] = relationship(back_populates="assets")
+    name_asset: Mapped["NarratorNameAsset"] = relationship(foreign_keys=[name_asset_id])
+    audio_file: Mapped["NarratorAudioFile | None"] = relationship(
+        foreign_keys=[audio_file_id]
+    )
+
+
+class StoryRoleOverride(Base):
+    """Переопределение визуала роли в рамках сюжета (фича 2).
+
+    Логика роли (``role_slug``) не меняется — меняются только отображаемое
+    имя и две карточки-картинки (лицо/рубашка) для стадии выдачи роли.
+    UNIQUE (story_id, role_slug).
+    """
+
+    __tablename__ = "story_role_overrides"
+    __table_args__ = (
+        UniqueConstraint(
+            "story_id", "role_slug", name="uq_story_role_overrides_story_role"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    story_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("stories.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role_slug: Mapped[str] = mapped_column(String(20), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    card_front_image_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("image_files.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    card_back_image_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("image_files.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    story: Mapped["Story"] = relationship(back_populates="role_overrides")
+    card_front_image: Mapped["ImageFile | None"] = relationship(
+        foreign_keys=[card_front_image_id]
+    )
+    card_back_image: Mapped["ImageFile | None"] = relationship(
+        foreign_keys=[card_back_image_id]
     )

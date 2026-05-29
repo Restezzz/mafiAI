@@ -6,13 +6,15 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { X, Save } from 'lucide-react';
 import {
   adminStoriesApi,
+  CoverCrop,
   StoryReadFull,
-  StorySettings,
 } from '../../../api/adminStoriesApi';
 import { logger } from '../../../services/logger';
 import { parseApiError } from '../../../utils/parseApiError';
 import { getApiErrorMessage } from '../../../utils/getApiErrorMessage';
+import CoverEditor from './CoverEditor';
 import './StepEditPanel.scss'; // Reuse same panel styles
+import './CoverEditor.scss';
 
 interface Props {
   story: StoryReadFull;
@@ -32,6 +34,15 @@ export default function StorySettingsPanel({ story, onClose, onStoryUpdated }: P
   const [multiplier, setMultiplier] = useState(story.settings?.timer_multiplier_default ?? '1');
   const [karaoke, setKaraoke] = useState(story.settings?.karaoke_enabled ?? true);
 
+  // --- Cover (фича 3) ---
+  const [coverImageId, setCoverImageId] = useState<string | null>(story.cover_image_id);
+  const [coverUrl, setCoverUrl] = useState<string | null>(story.cover_url);
+  const [coverCrop, setCoverCrop] = useState<CoverCrop | null>(story.cover_crop);
+  const [coverDims, setCoverDims] = useState<{ w: number | null; h: number | null }>({
+    w: null,
+    h: null,
+  });
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [okFlash, setOkFlash] = useState(false);
@@ -44,6 +55,10 @@ export default function StorySettingsPanel({ story, onClose, onStoryUpdated }: P
     setPause(story.settings?.inter_cue_pause_seconds ?? '0');
     setMultiplier(story.settings?.timer_multiplier_default ?? '1');
     setKaraoke(story.settings?.karaoke_enabled ?? true);
+    setCoverImageId(story.cover_image_id);
+    setCoverUrl(story.cover_url);
+    setCoverCrop(story.cover_crop);
+    setCoverDims({ w: null, h: null });
   }, [story]);
 
   const pauseNum = Number(pause);
@@ -60,18 +75,26 @@ export default function StorySettingsPanel({ story, onClose, onStoryUpdated }: P
     try {
       const tasks: Promise<unknown>[] = [];
       // Update story metadata
+      const coverDirty =
+        coverImageId !== story.cover_image_id ||
+        JSON.stringify(coverCrop) !== JSON.stringify(story.cover_crop);
       const metaDirty =
         name !== story.name ||
         description !== (story.description ?? '') ||
         isActive !== story.is_active ||
         useOnlyOwn !== story.use_only_own_triggers;
-      if (metaDirty) {
+      if (metaDirty || coverDirty) {
         tasks.push(
           adminStoriesApi.update(story.id, {
             name: name.trim(),
             description: description.trim() || undefined,
             is_active: isActive,
             use_only_own_triggers: useOnlyOwn,
+            ...(coverDirty
+              ? coverImageId
+                ? { cover_image_id: coverImageId, cover_crop: coverCrop }
+                : { unset_cover: true }
+              : {}),
           }),
         );
       }
@@ -104,7 +127,7 @@ export default function StorySettingsPanel({ story, onClose, onStoryUpdated }: P
     } finally {
       setSaving(false);
     }
-  }, [story, name, description, isActive, useOnlyOwn, pause, multiplier, karaoke, formValid, onStoryUpdated]);
+  }, [story, name, description, isActive, useOnlyOwn, pause, multiplier, karaoke, coverImageId, coverCrop, formValid, onStoryUpdated]);
 
   return (
     <div className="step-edit-panel">
@@ -152,6 +175,30 @@ export default function StorySettingsPanel({ story, onClose, onStoryUpdated }: P
             />
             Активен (виден в лобби)
           </label>
+        </div>
+
+        <div className="step-edit-panel__divider" />
+
+        {/* --- Cover (фича 3) --- */}
+        <div className="step-edit-panel__field">
+          <label>Обложка (для голосования)</label>
+          <CoverEditor
+            coverUrl={coverUrl}
+            crop={coverCrop}
+            imageWidth={coverDims.w}
+            imageHeight={coverDims.h}
+            onUploaded={(img) => {
+              setCoverImageId(img.id);
+              setCoverUrl(img.url);
+              setCoverDims({ w: img.width, h: img.height });
+            }}
+            onCropChange={setCoverCrop}
+            onRemove={() => {
+              setCoverImageId(null);
+              setCoverUrl(null);
+              setCoverCrop(null);
+            }}
+          />
         </div>
 
         <div className="step-edit-panel__divider" />
