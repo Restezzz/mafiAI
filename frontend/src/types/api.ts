@@ -12,6 +12,7 @@ import {
   RoleConfig,
   DevLobbyInfo,
   StoryVoteInfo,
+  NamePickInfo,
 } from './game';
 
 // ---- Auth ----
@@ -163,7 +164,7 @@ export interface ActivateDevPlayerResponse {
 export interface StartSessionResponse {
   status: 'active';
   phase: {
-    type: 'role_reveal' | 'story_vote';
+    type: 'role_reveal' | 'story_vote' | 'name_pick';
     number: number;
   };
 }
@@ -192,6 +193,7 @@ export interface GameStateResponse {
   players: Player[];
   role_reveal: RoleRevealInfo | null;
   story_vote?: StoryVoteInfo | null;
+  name_pick?: NamePickInfo | null;
   awaiting_action: boolean;
   action_type: Exclude<ActionType, 'vote'> | null;
   available_targets: Target[] | null;

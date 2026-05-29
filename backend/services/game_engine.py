@@ -30,6 +30,7 @@ from models.day_vote import DayVote
 from models.player import Player
 from models.role import Role
 from models.session import Session
+from models.story import StoryName
 from services.narration_script import (
     all_acknowledged_steps,
     day_discussion_steps,
@@ -76,6 +77,25 @@ def _player_target_dict(p: Player) -> dict:
     }
 
 
+async def _allowed_player_names(db: AsyncSession, session: Session) -> set[str]:
+    """Пул допустимых имён игроков.
+
+    Источник — собственный набор имён выбранного сюжета (``story_names``). Если
+    у сюжета нет своих имён (или сюжет не выбран) — фолбэк на глобальный
+    манифест озвучки.
+    """
+    if session.story_id is not None:
+        rows = await db.scalars(
+            select(StoryName.display_name).where(
+                StoryName.story_id == session.story_id
+            )
+        )
+        names = {n for n in rows.all() if n}
+        if names:
+            return names
+    return set(get_audio_manifest().display_names())
+
+
 async def _autofill_unselected_names(
     db: AsyncSession,
     session: Session,
@@ -99,7 +119,7 @@ async def _autofill_unselected_names(
     Возвращает список игроков, которым было назначено новое имя — caller
     должен закоммитить транзакцию и отправить им WS ``player_renamed``.
     """
-    allowed = set(get_audio_manifest().display_names())
+    allowed = await _allowed_player_names(db, session)
     if not allowed:
         return []
 
@@ -693,9 +713,10 @@ async def start_story_vote(db: AsyncSession, session: Session) -> dict:
     stories = await _votable_stories(db)
     if len(stories) <= 1:
         session.story_id = stories[0].id if stories else None
+        session.status = "active"
         await db.commit()
-        await _run_role_reveal(db, session)
-        return {"status": "active", "phase": {"type": "role_reveal", "number": 0}}
+        await start_name_pick(db, session)
+        return {"status": "active", "phase": {"type": "name_pick", "number": 0}}
 
     phase = GamePhase(
         id=uuid.uuid4(),
@@ -866,6 +887,181 @@ async def resolve_story_vote(session_id: uuid.UUID) -> None:
             "Story vote resolved",
             session_id=str(session_id),
             story_id=chosen_id,
+        )
+        await start_name_pick(db, session)
+
+
+# ----------------------------------------------------------------------------
+# Фаза name_pick: выбор имени из набора победившего сюжета (после story_vote).
+# ----------------------------------------------------------------------------
+
+NAME_PICK_DEFAULT_TIMER = 60
+
+
+async def _name_pick_options(db: AsyncSession, session: Session) -> list[dict]:
+    """Список кандидатных имён для фазы name_pick.
+
+    Источник — собственный набор имён выбранного сюжета (``story_names``).
+    Фолбэк (у сюжета нет своих имён / сюжет не выбран) — глобальный манифест
+    озвучки (с гендером, как раньше на StorySelectionPage).
+    """
+    if session.story_id is not None:
+        rows = (
+            await db.scalars(
+                select(StoryName)
+                .where(StoryName.story_id == session.story_id)
+                .order_by(StoryName.sort_order, StoryName.display_name)
+            )
+        ).all()
+        if rows:
+            return [
+                {"display": n.display_name, "gender": None} for n in rows
+            ]
+    return [
+        {"display": n.display, "gender": n.gender}
+        for n in get_audio_manifest().names
+    ]
+
+
+async def start_name_pick(db: AsyncSession, session: Session) -> None:
+    """Создаёт фазу ``name_pick`` и рассылает кандидатные имена.
+
+    Запускается после резолва ``story_vote`` (или сразу, если голосовать не за
+    что). Игроки выбирают имя из набора победившего сюжета. По истечении
+    таймера / когда все выбрали — ``resolve_name_pick`` раздаёт роли.
+    """
+    options = await _name_pick_options(db, session)
+
+    phase = GamePhase(
+        id=uuid.uuid4(),
+        session_id=session.id,
+        phase_type="name_pick",
+        phase_number=0,
+        started_at=utc_now(),
+        ended_at=None,
+    )
+    db.add(phase)
+    if session.status != "active":
+        session.status = "active"
+    db.add(
+        GameEvent(
+            id=uuid.uuid4(),
+            session_id=session.id,
+            phase_id=phase.id,
+            event_type="name_pick_started",
+            payload={"phase": {"type": "name_pick", "number": 0}},
+        )
+    )
+    await db.commit()
+
+    timer_seconds = int(
+        (session.settings or {}).get("name_pick_timer_seconds")
+        or NAME_PICK_DEFAULT_TIMER
+    )
+    rt = runtime_state.get(session.id)
+    rt.timer_name = "name_pick"
+    rt.timer_seconds = timer_seconds
+    rt.timer_started_at = phase.started_at
+
+    await ws_manager.send_to_session(
+        session.id,
+        {
+            "type": "phase_changed",
+            "payload": {
+                "phase": {"type": "name_pick", "number": 0},
+                "timer_seconds": timer_seconds,
+                "started_at": phase.started_at.isoformat(),
+                "names": options,
+            },
+        },
+    )
+
+    async def _on_name_pick_timeout():
+        asyncio.create_task(resolve_name_pick(session.id))
+
+    await timer_service.start_timer(
+        session.id, "name_pick", timer_seconds, _on_name_pick_timeout
+    )
+    log_event(
+        logger,
+        logging.INFO,
+        "name_pick.started",
+        "Name pick phase started",
+        session_id=str(session.id),
+        options=len(options),
+    )
+
+
+async def submit_name_pick(
+    db: AsyncSession, session: Session, player: Player, name: str
+) -> dict:
+    """Игрок выбирает имя из набора сюжета на фазе ``name_pick``."""
+    phase = await get_current_phase(db, session.id)
+    if not phase or phase.phase_type != "name_pick":
+        raise GameError(403, "wrong_phase", "Выбор имени сейчас недоступен")
+    if player.status != "alive":
+        raise GameError(403, "player_dead", "Выбывшие игроки не выбирают имя")
+
+    chosen = name.strip()
+    allowed = await _allowed_player_names(db, session)
+    if chosen not in allowed:
+        raise GameError(404, "name_not_allowed", "Имя недоступно для этого сюжета")
+
+    others = list(
+        (
+            await db.scalars(
+                select(Player).where(
+                    Player.session_id == session.id, Player.id != player.id
+                )
+            )
+        ).all()
+    )
+    if any(p.name == chosen for p in others):
+        raise GameError(409, "name_taken", "Это имя уже занято другим игроком")
+
+    player.name = chosen
+    db.add(
+        GameEvent(
+            id=uuid.uuid4(),
+            session_id=session.id,
+            phase_id=phase.id,
+            event_type="player_renamed",
+            payload={"player_id": str(player.id), "name": chosen, "auto": False},
+        )
+    )
+    await db.commit()
+
+    await ws_manager.send_to_session(
+        session.id,
+        {
+            "type": "player_renamed",
+            "payload": {"player_id": str(player.id), "name": chosen, "auto": False},
+        },
+    )
+    return {"ok": True}
+
+
+async def resolve_name_pick(session_id: uuid.UUID) -> None:
+    """Закрывает фазу ``name_pick`` и переходит к раздаче ролей."""
+    from core.database import async_session_factory
+
+    async with async_session_factory() as db:
+        session = await db.get(Session, session_id)
+        if session is None:
+            return
+        phase = await get_current_phase(db, session_id)
+        if phase is None or phase.phase_type != "name_pick":
+            return  # уже разрешено
+
+        phase.ended_at = utc_now()
+        await db.commit()
+        await timer_service.cancel_timer(session_id, "name_pick")
+        log_event(
+            logger,
+            logging.INFO,
+            "name_pick.resolved",
+            "Name pick resolved",
+            session_id=str(session_id),
         )
         await _run_role_reveal(db, session)
 

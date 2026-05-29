@@ -1,15 +1,20 @@
 /**
- * Панель ноды «Имена» (фича 1).
+ * Панель ноды «Имена» (имена пер-сюжет + варианты произношения).
  *
- * Управляет вариантами произношения имён (story-scoped): каждый вариант
- * имеет ключ (например `voting`) и набор mp3 — по одному на каждое имя из
- * глобального каталога. В нодах нарратива cue ссылается на вариант по ключу,
- * и backend вставляет соответствующее mp3 между фразами при озвучке имени.
+ * Сверху — управление БАЗОВЫМ набором имён сюжета (`story.names`): добавить /
+ * удалить / переименовать имя + дефолтное mp3 произношения. Игрок на фазе
+ * `name_pick` выбирает имя именно из этого набора.
+ *
+ * Ниже — варианты произношения имён (story-scoped): каждый вариант имеет ключ
+ * (например `voting`) и набор mp3 — по одному на каждое имя сюжета. В нодах
+ * нарратива cue ссылается на вариант по ключу, и backend вставляет
+ * соответствующее mp3 между фразами при озвучке имени.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, Trash2, Upload, Play, Square, X } from 'lucide-react';
 import {
   adminStoriesApi,
+  StoryName,
   StoryNameVariant,
   StoryReadFull,
 } from '../../../api/adminStoriesApi';
@@ -59,15 +64,26 @@ function MiniPlayer({ src }: { src: string }) {
   );
 }
 
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40);
+}
+
 export default function NamesNodePanel({ storyId, story, onStoryChanged }: Props) {
+  const names = story.names;
   const variants = story.name_variants;
   const [selectedId, setSelectedId] = useState<string | null>(
     variants[0]?.id ?? null,
   );
   const [newKey, setNewKey] = useState('');
   const [newLabel, setNewLabel] = useState('');
+  const [newName, setNewName] = useState('');
   const [audioFiles, setAudioFiles] = useState<AudioFile[]>([]);
   const [uploadingFor, setUploadingFor] = useState<string | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -88,6 +104,99 @@ export default function NamesNodePanel({ storyId, story, onStoryChanged }: Props
 
   const selected: StoryNameVariant | undefined = variants.find(
     (v) => v.id === selectedId,
+  );
+
+  const handleAddName = useCallback(async () => {
+    const display = newName.trim();
+    if (!display) {
+      setNameError('Введите имя');
+      return;
+    }
+    const key = slugify(display) || `name_${names.length + 1}`;
+    setNameError(null);
+    try {
+      await adminStoriesApi.createStoryName(storyId, {
+        key,
+        display_name: display,
+        sort_order: names.length,
+      });
+      setNewName('');
+      onStoryChanged();
+    } catch (err) {
+      const msg = parseApiError(err);
+      setNameError(typeof msg === 'string' ? msg : 'Не удалось добавить имя');
+      logger.warn('admin.story.name_create_failed', 'create name failed', {
+        error: msg,
+      });
+    }
+  }, [storyId, newName, names.length, onStoryChanged]);
+
+  const handleDeleteName = useCallback(
+    async (nameId: string) => {
+      try {
+        await adminStoriesApi.deleteStoryName(storyId, nameId);
+        onStoryChanged();
+      } catch (err) {
+        logger.warn('admin.story.name_delete_failed', 'delete name failed', {
+          error: parseApiError(err),
+        });
+      }
+    },
+    [storyId, onStoryChanged],
+  );
+
+  const setBaseAudio = useCallback(
+    async (nameId: string, audioFileId: string | null) => {
+      try {
+        await adminStoriesApi.updateStoryName(
+          storyId,
+          nameId,
+          audioFileId
+            ? { base_audio_file_id: audioFileId }
+            : { unset_base_audio: true },
+        );
+        onStoryChanged();
+      } catch (err) {
+        logger.warn('admin.story.name_base_audio_failed', 'set base audio failed', {
+          error: parseApiError(err),
+        });
+      }
+    },
+    [storyId, onStoryChanged],
+  );
+
+  const handleUploadBase = useCallback(
+    async (nameId: string, file: File) => {
+      setUploadingFor(`base:${nameId}`);
+      try {
+        let audioFileId: string;
+        try {
+          const res = await adminNarratorApi.uploadAudioFile(file);
+          audioFileId = res.data.id;
+        } catch (uploadErr: any) {
+          if (uploadErr?.response?.status === 409) {
+            const list = await adminNarratorApi.listAudioFiles();
+            const existing = list.data.audio_files.find(
+              (af) => af.filename === file.name,
+            );
+            if (!existing) throw uploadErr;
+            audioFileId = existing.id;
+          } else {
+            throw uploadErr;
+          }
+        }
+        await setBaseAudio(nameId, audioFileId);
+        const list = await adminNarratorApi.listAudioFiles();
+        setAudioFiles(list.data.audio_files);
+      } catch (err) {
+        logger.warn('admin.story.name_base_upload_failed', 'upload base failed', {
+          error: parseApiError(err),
+        });
+      } finally {
+        setUploadingFor(null);
+      }
+    },
+    [setBaseAudio],
   );
 
   const handleAddVariant = useCallback(async () => {
@@ -133,14 +242,14 @@ export default function NamesNodePanel({ storyId, story, onStoryChanged }: Props
   const setAsset = useCallback(
     async (
       variantId: string,
-      nameAssetId: string,
+      storyNameId: string,
       audioFileId: string | null,
     ) => {
       try {
         await adminStoriesApi.setNameVariantAsset(
           storyId,
           variantId,
-          nameAssetId,
+          storyNameId,
           audioFileId ? { audio_file_id: audioFileId } : { unset_audio: true },
         );
         onStoryChanged();
@@ -154,8 +263,8 @@ export default function NamesNodePanel({ storyId, story, onStoryChanged }: Props
   );
 
   const handleUpload = useCallback(
-    async (variantId: string, nameAssetId: string, file: File) => {
-      setUploadingFor(nameAssetId);
+    async (variantId: string, storyNameId: string, file: File) => {
+      setUploadingFor(storyNameId);
       try {
         let audioFileId: string;
         try {
@@ -173,7 +282,7 @@ export default function NamesNodePanel({ storyId, story, onStoryChanged }: Props
             throw uploadErr;
           }
         }
-        await setAsset(variantId, nameAssetId, audioFileId);
+        await setAsset(variantId, storyNameId, audioFileId);
         const list = await adminNarratorApi.listAudioFiles();
         setAudioFiles(list.data.audio_files);
       } catch (err) {
@@ -190,6 +299,112 @@ export default function NamesNodePanel({ storyId, story, onStoryChanged }: Props
   return (
     <div className="step-edit-panel__section">
       <div className="step-edit-panel__section-header">
+        <span>Имена сюжета</span>
+      </div>
+
+      {nameError && <div className="step-edit-panel__error">{nameError}</div>}
+
+      <div className="step-edit-panel__field">
+        <label>Добавить имя</label>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input
+            className="admin-input"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleAddName();
+            }}
+            placeholder="имя (напр. Анна)"
+            style={{ flex: 1 }}
+          />
+          <button
+            type="button"
+            className="step-edit-panel__add-btn"
+            onClick={handleAddName}
+            title="Добавить имя"
+          >
+            <Plus size={14} />
+          </button>
+        </div>
+      </div>
+
+      {names.length === 0 && (
+        <div className="step-edit-panel__empty">
+          У сюжета нет своих имён — используется общий каталог озвучки.
+          Добавьте имена, чтобы игроки выбирали из набора этого сюжета.
+        </div>
+      )}
+
+      {names.length > 0 && (
+        <div className="step-edit-panel__cues">
+          {names.map((n: StoryName) => (
+            <div key={n.id} className="step-edit-panel__variant">
+              <div className="step-edit-panel__variant-header">
+                <span className="step-edit-panel__variant-label">
+                  {n.display_name}
+                </span>
+                <div className="step-edit-panel__variant-controls">
+                  {n.base_audio_url && <MiniPlayer src={n.base_audio_url} />}
+                  {n.base_audio_file_id && (
+                    <button
+                      type="button"
+                      className="step-edit-panel__cue-delete"
+                      onClick={() => setBaseAudio(n.id, null)}
+                      title="Очистить аудио"
+                    >
+                      <X size={11} />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="step-edit-panel__cue-delete"
+                    onClick={() => handleDeleteName(n.id)}
+                    title="Удалить имя"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
+              <div className="step-edit-panel__variant-audio">
+                <label className="step-edit-panel__upload-label">
+                  <Upload size={12} />
+                  <span>{n.base_audio_filename ? 'Заменить' : 'Загрузить'}</span>
+                  <input
+                    type="file"
+                    accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleUploadBase(n.id, f);
+                    }}
+                    disabled={uploadingFor === `base:${n.id}`}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+                {audioFiles.length > 0 && (
+                  <select
+                    className="admin-select step-edit-panel__audio-select"
+                    value={n.base_audio_file_id ?? ''}
+                    onChange={(e) => setBaseAudio(n.id, e.target.value || null)}
+                    disabled={uploadingFor === `base:${n.id}`}
+                  >
+                    <option value="">— из загруженных —</option>
+                    {audioFiles.map((af) => (
+                      <option key={af.id} value={af.id}>
+                        {af.filename}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div
+        className="step-edit-panel__section-header"
+        style={{ marginTop: 16 }}
+      >
         <span>Варианты произношения имён</span>
       </div>
 
@@ -263,11 +478,11 @@ export default function NamesNodePanel({ storyId, story, onStoryChanged }: Props
         <div className="step-edit-panel__cues">
           {selected.assets.length === 0 && (
             <div className="step-edit-panel__empty">
-              В каталоге нет имён.
+              В наборе имён сюжета пусто. Добавьте имена выше.
             </div>
           )}
           {selected.assets.map((a) => (
-            <div key={a.name_asset_id} className="step-edit-panel__variant">
+            <div key={a.story_name_id} className="step-edit-panel__variant">
               <div className="step-edit-panel__variant-header">
                 <span className="step-edit-panel__variant-label">
                   {a.display_name}
@@ -278,7 +493,7 @@ export default function NamesNodePanel({ storyId, story, onStoryChanged }: Props
                     <button
                       type="button"
                       className="step-edit-panel__cue-delete"
-                      onClick={() => setAsset(selected.id, a.name_asset_id, null)}
+                      onClick={() => setAsset(selected.id, a.story_name_id, null)}
                       title="Очистить аудио"
                     >
                       <X size={11} />
@@ -295,9 +510,9 @@ export default function NamesNodePanel({ storyId, story, onStoryChanged }: Props
                     accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a"
                     onChange={(e) => {
                       const f = e.target.files?.[0];
-                      if (f) handleUpload(selected.id, a.name_asset_id, f);
+                      if (f) handleUpload(selected.id, a.story_name_id, f);
                     }}
-                    disabled={uploadingFor === a.name_asset_id}
+                    disabled={uploadingFor === a.story_name_id}
                     style={{ display: 'none' }}
                   />
                 </label>
@@ -308,11 +523,11 @@ export default function NamesNodePanel({ storyId, story, onStoryChanged }: Props
                     onChange={(e) =>
                       setAsset(
                         selected.id,
-                        a.name_asset_id,
+                        a.story_name_id,
                         e.target.value || null,
                       )
                     }
-                    disabled={uploadingFor === a.name_asset_id}
+                    disabled={uploadingFor === a.story_name_id}
                   >
                     <option value="">— из загруженных —</option>
                     {audioFiles.map((af) => (

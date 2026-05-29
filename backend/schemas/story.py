@@ -398,10 +398,43 @@ class CoverCrop(BaseModel):
 # =============================================================================
 
 
-class StoryNameVariantAssetRead(BaseModel):
-    """mp3 конкретного имени для варианта."""
+class StoryNameRead(BaseModel):
+    """Базовое имя из набора сюжета."""
 
-    name_asset_id: str
+    id: str
+    key: str
+    display_name: str
+    sort_order: int
+    base_audio_file_id: str | None = None
+    base_audio_url: str | None = None
+    base_audio_filename: str | None = None
+
+
+class StoryNameCreate(BaseModel):
+    key: str = Field(..., min_length=1, max_length=40)
+    display_name: str = Field(..., min_length=1, max_length=50)
+    sort_order: int = Field(default=0, ge=0, le=9999)
+    base_audio_file_id: UUID | None = None
+
+    @field_validator("key")
+    @classmethod
+    def _validate_key(cls, v: str) -> str:
+        if not _VARIANT_KEY_RE.match(v):
+            raise ValueError("key должен быть [a-z0-9_], 1..40 символов")
+        return v
+
+
+class StoryNameUpdate(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=50)
+    sort_order: int | None = Field(default=None, ge=0, le=9999)
+    base_audio_file_id: UUID | None = None
+    unset_base_audio: bool = False
+
+
+class StoryNameVariantAssetRead(BaseModel):
+    """mp3 конкретного имени (из набора сюжета) для варианта."""
+
+    story_name_id: str
     display_name: str
     audio_file_id: str | None = None
     audio_url: str | None = None
@@ -537,6 +570,8 @@ class StoryReadFull(BaseModel):
     cover_image_id: str | None = None
     cover_url: str | None = None
     cover_crop: CoverCrop | None = None
+    # Имена пер-сюжет: собственный набор имён (фолбэк — глобальный каталог).
+    names: list[StoryNameRead] = []
     # Фича 1 / 2: варианты имён и переопределения ролей сюжета.
     name_variants: list[StoryNameVariantRead] = []
     role_overrides: list[StoryRoleOverrideRead] = []

@@ -166,6 +166,11 @@ class Story(Base):
         foreign_keys=[superseded_by_id],
     )
     cover_image: Mapped["ImageFile | None"] = relationship(foreign_keys=[cover_image_id])
+    names: Mapped[list["StoryName"]] = relationship(
+        back_populates="story",
+        cascade="all, delete-orphan",
+        order_by="StoryName.sort_order",
+    )
     name_variants: Mapped[list["StoryNameVariant"]] = relationship(
         back_populates="story",
         cascade="all, delete-orphan",
@@ -342,8 +347,8 @@ class StoryNarrationCue(Base):
     # Фича 1: какой вариант произношения имени игрока использовать при
     # инъекции имени между фразами (composite/name_pair). Ссылается на
     # StoryNameVariant.key этого же сюжета. NULL = дефолтное аудио имени
-    # (narrator_name_assets.audio_file). Если ключа нет среди вариантов
-    # сюжета на runtime — тихий fallback на дефолт.
+    # (story_names.base_audio_file, фолбэк — narrator_name_assets.audio_file).
+    # Если ключа нет среди вариантов сюжета на runtime — тихий fallback на дефолт.
     name_variant_key: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
     step: Mapped["StoryStep"] = relationship(back_populates="cues")
@@ -412,13 +417,65 @@ class StoryTransition(Base):
     )
 
 
+class StoryName(Base):
+    """Базовое имя персонажа в наборе имён сюжета (фича: имена пер-сюжет).
+
+    Каждый сюжет задаёт СВОЙ набор имён («15 имён»), из которых игрок выбирает
+    себе имя на фазе ``name_pick``. ``base_audio_file_id`` — дефолтное
+    произношение имени ведущим (NULL = без аудио). Конкретные варианты
+    произношения (``StoryNameVariant``) ссылаются на эти имена через
+    ``StoryNameVariantAsset.story_name_id``.
+
+    Фолбэк: если у сюжета нет ни одного ``StoryName`` — runtime/админка/выбор
+    игрока используют глобальный каталог ``narrator_name_assets`` как раньше.
+
+    UNIQUE (story_id, key).
+    """
+
+    __tablename__ = "story_names"
+    __table_args__ = (
+        UniqueConstraint("story_id", "key", name="uq_story_names_story_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    story_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("stories.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key: Mapped[str] = mapped_column(String(40), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(50), nullable=False)
+    base_audio_file_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("narrator_audio_files.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    story: Mapped["Story"] = relationship(back_populates="names")
+    base_audio_file: Mapped["NarratorAudioFile | None"] = relationship(
+        foreign_keys=[base_audio_file_id]
+    )
+
+
 class StoryNameVariant(Base):
     """Вариант произношения имён (фича 1).
 
     ``key`` — доп-id варианта (например ``voting``). Один на сюжет (UNIQUE
-    story_id+key). Для каждого имени из глобального каталога
-    ``narrator_name_assets`` админ может загрузить mp3 этого варианта —
-    запись ``StoryNameVariantAsset``.
+    story_id+key). Для каждого имени из набора сюжета (``story_names``) админ
+    может загрузить mp3 этого варианта — запись ``StoryNameVariantAsset``.
 
     Когда в narration-cue выбран ``name_variant_key == key``, runtime при
     озвучке имени игрока подставляет mp3 варианта вместо дефолтного.
@@ -461,14 +518,14 @@ class StoryNameVariant(Base):
 class StoryNameVariantAsset(Base):
     """mp3 конкретного имени для конкретного варианта (фича 1).
 
-    Связывает ``StoryNameVariant`` с именем из ``narrator_name_assets`` и
-    аудио-файлом. UNIQUE (variant_id, name_asset_id) — одно аудио на пару.
+    Связывает ``StoryNameVariant`` с именем из набора сюжета (``story_names``)
+    и аудио-файлом. UNIQUE (variant_id, story_name_id) — одно аудио на пару.
     """
 
     __tablename__ = "story_name_variant_assets"
     __table_args__ = (
         UniqueConstraint(
-            "variant_id", "name_asset_id", name="uq_story_name_variant_assets_pair"
+            "variant_id", "story_name_id", name="uq_story_name_variant_assets_pair"
         ),
     )
 
@@ -481,9 +538,9 @@ class StoryNameVariantAsset(Base):
         nullable=False,
         index=True,
     )
-    name_asset_id: Mapped[uuid.UUID] = mapped_column(
+    story_name_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("narrator_name_assets.id", ondelete="CASCADE"),
+        ForeignKey("story_names.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -503,7 +560,7 @@ class StoryNameVariantAsset(Base):
     )
 
     variant: Mapped["StoryNameVariant"] = relationship(back_populates="assets")
-    name_asset: Mapped["NarratorNameAsset"] = relationship(foreign_keys=[name_asset_id])
+    story_name: Mapped["StoryName"] = relationship(foreign_keys=[story_name_id])
     audio_file: Mapped["NarratorAudioFile | None"] = relationship(
         foreign_keys=[audio_file_id]
     )

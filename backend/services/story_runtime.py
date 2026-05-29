@@ -72,6 +72,7 @@ from models.narrator import (
 )
 from models.story import (
     Story,
+    StoryName,
     StoryNameVariant,
     StoryNameVariantAsset,
     StoryNarrationCue,
@@ -647,15 +648,41 @@ async def _resolve_variant_name_audio(
     if not target_name:
         return None, {}
 
-    # name_asset по display_name (case-insensitive), c дефолтным аудио имени.
-    name_asset = await db.scalar(
-        select(NarratorNameAsset)
-        .where(func.lower(NarratorNameAsset.display_name) == target_name.lower())
-        .options(selectinload(NarratorNameAsset.audio_file))
+    # Источник имени — собственный набор сюжета (story_names) по display_name
+    # (case-insensitive), c дефолтным аудио имени. Фолбэк: если у сюжета нет
+    # своих имён — глобальный каталог narrator_name_assets (старый путь).
+    story_name = await db.scalar(
+        select(StoryName)
+        .where(
+            StoryName.story_id == story_id,
+            func.lower(StoryName.display_name) == target_name.lower(),
+        )
+        .options(selectinload(StoryName.base_audio_file))
     )
-    if name_asset is None:
-        return target_name, {}
-    default_audio: NarratorAudioFile | None = name_asset.audio_file
+    story_name_id: uuid.UUID | None = None
+    default_audio: NarratorAudioFile | None = None
+    if story_name is not None:
+        story_name_id = story_name.id
+        default_audio = story_name.base_audio_file
+    else:
+        has_own_names = await db.scalar(
+            select(func.count())
+            .select_from(StoryName)
+            .where(StoryName.story_id == story_id)
+        )
+        if has_own_names:
+            # У сюжета есть свой набор имён, но целевого имени в нём нет —
+            # озвучить нечем.
+            return target_name, {}
+        name_asset = await db.scalar(
+            select(NarratorNameAsset)
+            .where(func.lower(NarratorNameAsset.display_name) == target_name.lower())
+            .options(selectinload(NarratorNameAsset.audio_file))
+        )
+        if name_asset is None:
+            return target_name, {}
+        story_name_id = name_asset.id
+        default_audio = name_asset.audio_file
 
     variants = (
         await db.scalars(
@@ -675,7 +702,7 @@ async def _resolve_variant_name_audio(
     by_key: dict[str, NarratorAudioFile] = {}
     for variant in variants:
         for asset in variant.assets:
-            if asset.name_asset_id == name_asset.id and asset.audio_file is not None:
+            if asset.story_name_id == story_name_id and asset.audio_file is not None:
                 by_key[variant.key] = asset.audio_file
                 break
     # Фолбэк на дефолтное аудио имени для ключей без своего варианта.

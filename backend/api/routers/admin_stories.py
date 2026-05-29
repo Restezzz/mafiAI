@@ -31,10 +31,11 @@ from api.deps import get_db, require_admin
 from core.exceptions import GameError
 from core.logging import log_event
 from models.image import ImageFile
-from models.narrator import NarratorAudioFile, NarratorNameAsset, NarratorTrigger
+from models.narrator import NarratorAudioFile, NarratorTrigger
 from models.role import Role
 from models.story import (
     Story,
+    StoryName,
     StoryNameVariant,
     StoryNameVariantAsset,
     StoryNarrationCue,
@@ -57,6 +58,9 @@ from schemas.story import (
     StoryLayoutUpdate,
     StoryListItem,
     StoryListResponse,
+    StoryNameCreate,
+    StoryNameRead,
+    StoryNameUpdate,
     StoryNameVariantAssetRead,
     StoryNameVariantAssetUpdate,
     StoryNameVariantCreate,
@@ -152,20 +156,34 @@ def _serialize_cue(cue: StoryNarrationCue) -> StoryNarrationCueRead:
     )
 
 
+def _serialize_story_name(n: StoryName) -> StoryNameRead:
+    audio = n.base_audio_file
+    return StoryNameRead(
+        id=str(n.id),
+        key=n.key,
+        display_name=n.display_name,
+        sort_order=n.sort_order,
+        base_audio_file_id=str(n.base_audio_file_id) if n.base_audio_file_id else None,
+        base_audio_url=_audio_url(audio),
+        base_audio_filename=audio.filename if audio else None,
+    )
+
+
 def _serialize_name_variant(
-    variant: StoryNameVariant, all_names: list[NarratorNameAsset]
+    variant: StoryNameVariant, story_names: list[StoryName]
 ) -> StoryNameVariantRead:
-    """Сериализует вариант, включая ВСЕ имена каталога (заполненные и пустые слоты)."""
+    """Сериализует вариант: по одному слоту на каждое имя из набора сюжета
+    (``story_names``), заполненные и пустые."""
     by_name: dict[uuid.UUID, StoryNameVariantAsset] = {
-        a.name_asset_id: a for a in variant.assets
+        a.story_name_id: a for a in variant.assets
     }
     assets: list[StoryNameVariantAssetRead] = []
-    for name in all_names:
+    for name in story_names:
         asset = by_name.get(name.id)
         audio = asset.audio_file if asset else None
         assets.append(
             StoryNameVariantAssetRead(
-                name_asset_id=str(name.id),
+                story_name_id=str(name.id),
                 display_name=name.display_name,
                 audio_file_id=str(asset.audio_file_id)
                 if asset and asset.audio_file_id
@@ -234,9 +252,8 @@ def _serialize_settings(s: StorySettings | None) -> StorySettingsRead | None:
     )
 
 
-def _serialize_story_full(
-    story: Story, all_names: list[NarratorNameAsset]
-) -> StoryReadFull:
+def _serialize_story_full(story: Story) -> StoryReadFull:
+    story_names = list(story.names)
     return StoryReadFull(
         id=str(story.id),
         slug=story.slug,
@@ -256,8 +273,9 @@ def _serialize_story_full(
         cover_image_id=str(story.cover_image_id) if story.cover_image_id else None,
         cover_url=_image_url(story.cover_image),
         cover_crop=CoverCrop(**story.cover_crop) if story.cover_crop else None,
+        names=[_serialize_story_name(n) for n in story_names],
         name_variants=[
-            _serialize_name_variant(v, all_names) for v in story.name_variants
+            _serialize_name_variant(v, story_names) for v in story.name_variants
         ],
         role_overrides=[_serialize_role_override(o) for o in story.role_overrides],
     )
@@ -268,18 +286,9 @@ def _serialize_story_full(
 # ============================================================================
 
 
-async def _all_name_assets(db: AsyncSession) -> list[NarratorNameAsset]:
-    """Весь глобальный каталог имён (для строк ноды имён)."""
-    rows = await db.scalars(
-        select(NarratorNameAsset).order_by(NarratorNameAsset.display_name)
-    )
-    return list(rows.all())
-
-
 async def _story_full_response(db: AsyncSession, story: Story) -> StoryReadFull:
-    """Сериализует полный сюжет, подгружая каталог имён для ноды имён."""
-    names = await _all_name_assets(db)
-    return _serialize_story_full(story, names)
+    """Сериализует полный сюжет (имена берутся из набора сюжета ``story.names``)."""
+    return _serialize_story_full(story)
 
 
 async def _load_story_full(db: AsyncSession, story_id: UUID) -> Story:
@@ -295,6 +304,7 @@ async def _load_story_full(db: AsyncSession, story_id: UUID) -> Story:
             ),
             selectinload(Story.transitions),
             selectinload(Story.cover_image),
+            selectinload(Story.names).selectinload(StoryName.base_audio_file),
             selectinload(Story.name_variants)
             .selectinload(StoryNameVariant.assets)
             .selectinload(StoryNameVariantAsset.audio_file),
@@ -1531,6 +1541,17 @@ async def delete_image(
 # ============================================================================
 
 
+async def _story_names(db: AsyncSession, story_id: UUID) -> list[StoryName]:
+    """Набор имён сюжета (слоты для ноды имён), отсортированный."""
+    rows = await db.scalars(
+        select(StoryName)
+        .where(StoryName.story_id == story_id)
+        .order_by(StoryName.sort_order, StoryName.display_name)
+        .options(selectinload(StoryName.base_audio_file))
+    )
+    return list(rows.all())
+
+
 async def _load_variant_or_404(
     db: AsyncSession, story_id: UUID, variant_id: UUID
 ) -> StoryNameVariant:
@@ -1595,8 +1616,8 @@ async def create_name_variant(
         by_user=str(admin.id),
     )
     fresh = await _load_variant_or_404(db, story_id, variant.id)
-    names = await _all_name_assets(db)
-    return _serialize_name_variant(fresh, names)
+    story_names = await _story_names(db, story_id)
+    return _serialize_name_variant(fresh, story_names)
 
 
 @router.put(
@@ -1616,8 +1637,8 @@ async def update_name_variant(
         setattr(variant, key, value)
     await db.commit()
     fresh = await _load_variant_or_404(db, story_id, variant_id)
-    names = await _all_name_assets(db)
-    return _serialize_name_variant(fresh, names)
+    story_names = await _story_names(db, story_id)
+    return _serialize_name_variant(fresh, story_names)
 
 
 @router.delete(
@@ -1636,23 +1657,23 @@ async def delete_name_variant(
 
 
 @router.put(
-    "/stories/{story_id}/name-variants/{variant_id}/assets/{name_asset_id}",
+    "/stories/{story_id}/name-variants/{variant_id}/assets/{story_name_id}",
     response_model=StoryNameVariantAssetRead,
 )
 async def set_name_variant_asset(
     story_id: UUID,
     variant_id: UUID,
-    name_asset_id: UUID,
+    story_name_id: UUID,
     payload: StoryNameVariantAssetUpdate,
     _admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> StoryNameVariantAssetRead:
-    """Привязать/сменить/сбросить mp3 для пары (variant, name)."""
-    variant = await _load_variant_or_404(db, story_id, variant_id)
+    """Привязать/сменить/сбросить mp3 для пары (variant, имя сюжета)."""
+    await _load_variant_or_404(db, story_id, variant_id)
 
-    name = await db.get(NarratorNameAsset, name_asset_id)
-    if name is None:
-        raise GameError(404, "name_not_found", "Имя не найдено")
+    name = await db.get(StoryName, story_name_id)
+    if name is None or name.story_id != story_id:
+        raise GameError(404, "name_not_found", "Имя сюжета не найдено")
 
     new_audio_id: uuid.UUID | None = None
     if not payload.unset_audio and payload.audio_file_id is not None:
@@ -1664,14 +1685,14 @@ async def set_name_variant_asset(
     asset = await db.scalar(
         select(StoryNameVariantAsset).where(
             StoryNameVariantAsset.variant_id == variant_id,
-            StoryNameVariantAsset.name_asset_id == name_asset_id,
+            StoryNameVariantAsset.story_name_id == story_name_id,
         )
     )
     if asset is None:
         asset = StoryNameVariantAsset(
             id=uuid.uuid4(),
             variant_id=variant_id,
-            name_asset_id=name_asset_id,
+            story_name_id=story_name_id,
             audio_file_id=new_audio_id,
         )
         db.add(asset)
@@ -1686,12 +1707,125 @@ async def set_name_variant_asset(
     )
     audio = fresh.audio_file if fresh else None
     return StoryNameVariantAssetRead(
-        name_asset_id=str(name_asset_id),
+        story_name_id=str(story_name_id),
         display_name=name.display_name,
         audio_file_id=str(fresh.audio_file_id) if fresh and fresh.audio_file_id else None,
         audio_url=_audio_url(audio),
         audio_filename=audio.filename if audio else None,
     )
+
+
+# ============================================================================
+# Story names (имена пер-сюжет): базовый набор имён сюжета
+# ============================================================================
+
+
+async def _load_story_name_or_404(
+    db: AsyncSession, story_id: UUID, name_id: UUID
+) -> StoryName:
+    stmt = (
+        select(StoryName)
+        .where(StoryName.id == name_id, StoryName.story_id == story_id)
+        .options(selectinload(StoryName.base_audio_file))
+    )
+    name = await db.scalar(stmt)
+    if name is None:
+        raise GameError(404, "story_name_not_found", "Имя сюжета не найдено")
+    return name
+
+
+@router.post(
+    "/stories/{story_id}/names",
+    response_model=StoryNameRead,
+    status_code=201,
+)
+async def create_story_name(
+    story_id: UUID,
+    payload: StoryNameCreate,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> StoryNameRead:
+    story = await db.get(Story, story_id)
+    if story is None:
+        raise GameError(404, "story_not_found", "Сюжет не найден")
+
+    dup = await db.scalar(
+        select(func.count()).select_from(StoryName).where(
+            StoryName.story_id == story_id,
+            StoryName.key == payload.key,
+        )
+    )
+    if dup:
+        raise GameError(
+            409, "story_name_key_conflict",
+            f"Имя с ключом {payload.key!r} уже есть в этом сюжете",
+        )
+
+    if payload.base_audio_file_id is not None:
+        audio = await db.get(NarratorAudioFile, payload.base_audio_file_id)
+        if audio is None:
+            raise GameError(404, "audio_not_found", "Аудио-файл не найден")
+
+    name = StoryName(
+        id=uuid.uuid4(),
+        story_id=story_id,
+        key=payload.key,
+        display_name=payload.display_name,
+        sort_order=payload.sort_order,
+        base_audio_file_id=payload.base_audio_file_id,
+    )
+    db.add(name)
+    await db.commit()
+    log_event(
+        logger, logging.INFO, "story.name_created",
+        "Story name created", story_id=str(story_id), key=payload.key,
+        by_user=str(admin.id),
+    )
+    fresh = await _load_story_name_or_404(db, story_id, name.id)
+    return _serialize_story_name(fresh)
+
+
+@router.put(
+    "/stories/{story_id}/names/{name_id}",
+    response_model=StoryNameRead,
+)
+async def update_story_name(
+    story_id: UUID,
+    name_id: UUID,
+    payload: StoryNameUpdate,
+    _admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> StoryNameRead:
+    name = await _load_story_name_or_404(db, story_id, name_id)
+    data = payload.model_dump(exclude_unset=True)
+    unset_audio = data.pop("unset_base_audio", False)
+    if unset_audio:
+        name.base_audio_file_id = None
+        data.pop("base_audio_file_id", None)
+    elif "base_audio_file_id" in data and data["base_audio_file_id"] is not None:
+        audio = await db.get(NarratorAudioFile, data["base_audio_file_id"])
+        if audio is None:
+            raise GameError(404, "audio_not_found", "Аудио-файл не найден")
+    for key, value in data.items():
+        setattr(name, key, value)
+    await db.commit()
+    fresh = await _load_story_name_or_404(db, story_id, name_id)
+    return _serialize_story_name(fresh)
+
+
+@router.delete(
+    "/stories/{story_id}/names/{name_id}", status_code=204
+)
+async def delete_story_name(
+    story_id: UUID,
+    name_id: UUID,
+    _admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    name = await _load_story_name_or_404(db, story_id, name_id)
+    await db.delete(name)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ============================================================================
