@@ -26,6 +26,15 @@ def _mock_ws():
     return ws
 
 
+def _assert_sent(send_json: AsyncMock, expected_subset: dict) -> None:
+    """Кадр содержит ожидаемые поля + штамп server_now (значение не фиксируем)."""
+    send_json.assert_awaited_once()
+    sent = send_json.await_args.args[0]
+    for key, value in expected_subset.items():
+        assert sent[key] == value
+    assert "server_now" in sent
+
+
 @pytest.mark.asyncio
 async def test_connect_accepts_and_registers(cm, sid):
     uid = uuid.uuid4()
@@ -57,8 +66,8 @@ async def test_send_to_session_broadcasts(cm, sid):
     await cm.connect(sid, u2, ws2)
 
     await cm.send_to_session(sid, {"type": "test"})
-    ws1.send_json.assert_awaited_once_with({"type": "test"})
-    ws2.send_json.assert_awaited_once_with({"type": "test"})
+    _assert_sent(ws1.send_json, {"type": "test"})
+    _assert_sent(ws2.send_json, {"type": "test"})
 
 
 @pytest.mark.asyncio
@@ -87,7 +96,7 @@ async def test_send_to_user_delivers(cm, sid):
     ws = _mock_ws()
     await cm.connect(sid, uid, ws)
     await cm.send_to_user(sid, uid, {"type": "direct"})
-    ws.send_json.assert_awaited_once_with({"type": "direct"})
+    _assert_sent(ws.send_json, {"type": "direct"})
 
 
 @pytest.mark.asyncio
