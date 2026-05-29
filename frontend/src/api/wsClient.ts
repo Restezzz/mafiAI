@@ -348,8 +348,12 @@ class WsClient {
       logger.info('ws.connected', 'WebSocket connected', { sessionId }, { sessionId });
       // Ре-синк состояния: после (re)connect дергаем /state, чтобы догнать
       // сообщения, которые backend мог отправить, пока сокет ещё не был в OPEN.
+      // /state доступен только в активной игре — пока сессия в лобби
+      // (status=waiting) фаза ещё не создана и backend вернул бы 403. В лобби
+      // gameStore сброшен (phase=null), поэтому ресинк там пропускаем и не
+      // засоряем консоль 403-ошибкой.
       const sid = this.currentSessionId;
-      if (sid) {
+      if (sid && useGameStore.getState().phase !== null) {
         useGameStore
           .getState()
           .loadState(sid)
