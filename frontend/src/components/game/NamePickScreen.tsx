@@ -31,7 +31,15 @@ export default function NamePickScreen() {
   const players = useSessionStore((s) => s.players);
   const timerPaused = useSessionStore((s) => s.timerPaused);
 
-  const [selected, setSelected] = useState<string | null>(namePick?.my_name ?? null);
+  // На реконнекте my_name может быть лобби-плейсхолдером («Игрок 3»), которого
+  // нет в наборе имён сюжета — тогда ничего не предвыбираем (иначе кнопка
+  // «Подтвердить» активна и submit падает с 404 name_not_allowed).
+  const [selected, setSelected] = useState<string | null>(() => {
+    const initial = namePick?.my_name ?? null;
+    return initial && (namePick?.names ?? []).some((n) => n.display === initial)
+      ? initial
+      : null;
+  });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
