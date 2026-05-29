@@ -12,6 +12,7 @@ import DayDiscussionScreen from '../components/game/DayDiscussionScreen';
 import DayVotingScreen from '../components/game/DayVotingScreen';
 import FinaleScreen from '../components/game/FinaleScreen';
 import StoryVoteScreen from '../components/game/StoryVoteScreen';
+import NamePickScreen from '../components/game/NamePickScreen';
 import GameScreenHeader from '../components/game/GameScreenHeader';
 import DevPlayerQuickPill from '../components/dev/DevPlayerQuickPill';
 import AudioControls from '../components/audio/AudioControls';
@@ -350,6 +351,9 @@ export default function GamePage() {
 
       case 'story_vote':
         return <StoryVoteScreen />;
+
+      case 'name_pick':
+        return <NamePickScreen />;
 
       case 'narrator':
         return renderGameScreen(<NarratorScreen />);

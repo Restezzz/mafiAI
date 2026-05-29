@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Role, Player, Target, Announcement, VoteInfo, GameResult, Phase, SessionSettings, StoryVoteInfo, StoryVoteCard } from '../types/game';
+import { Role, Player, Target, Announcement, VoteInfo, GameResult, Phase, SessionSettings, StoryVoteInfo, StoryVoteCard, NamePickInfo, NamePickOption } from '../types/game';
 import type { AcknowledgeRoleResponse, GameStateResponse, NightActionCheckResult } from '../types/api';
 import { gameApi } from '../api/gameApi';
 import { useSessionStore } from './sessionStore';
@@ -9,6 +9,7 @@ export type GameScreen =
   | 'syncing'
   | 'role_reveal'
   | 'narrator'
+  | 'name_pick'
   | 'night_action'
   | 'night_waiting'
   | 'day_discussion'
@@ -65,6 +66,7 @@ type PhasePayload = {
   available_targets?: Target[] | null;
   announcement?: Announcement | null;
   stories?: StoryVoteCard[];
+  names?: NamePickOption[];
 };
 type StoryVoteUpdatePayload = {
   counts?: Record<string, number>;
@@ -170,6 +172,10 @@ interface GameState {
   storyVoteSubmitted: boolean;
   storyVoteTarget: string | null;
 
+  // Name pick (имена пер-сюжет): выбор имени после story_vote
+  namePick: NamePickInfo | null;
+  namePickSubmitted: boolean;
+
   // Finale
   result: GameResult | null;
 
@@ -179,6 +185,7 @@ interface GameState {
   submitVote: (targetId: string | null) => Promise<void>;
   submitStoryVote: (storyId: string) => Promise<void>;
   applyStoryVoteUpdate: (payload: StoryVoteUpdatePayload) => void;
+  submitNamePick: (name: string) => Promise<void>;
   acknowledgeRole: () => Promise<void>;
 
   // Plain setters (still used by screen-local logic)
@@ -233,6 +240,7 @@ function deriveScreen(
     return 'day_discussion';
   }
   if (phaseType === 'story_vote') return 'story_vote';
+  if (phaseType === 'name_pick') return 'name_pick';
   return 'role_reveal';
 }
 
@@ -397,6 +405,8 @@ const initialState = {
   storyVote: null,
   storyVoteSubmitted: false,
   storyVoteTarget: null,
+  namePick: null,
+  namePickSubmitted: false,
   result: null,
 };
 
@@ -454,6 +464,14 @@ export const useGameStore = create<GameState>((set, get) => ({
         storyVote: data.story_vote ?? (phase?.type === 'story_vote' ? state.storyVote : null),
         storyVoteSubmitted: data.story_vote?.my_vote != null || (phase?.type === 'story_vote' ? state.storyVoteSubmitted : false),
         storyVoteTarget: data.story_vote?.my_vote ?? (phase?.type === 'story_vote' ? state.storyVoteTarget : null),
+        namePick: data.name_pick ?? (phase?.type === 'name_pick' ? state.namePick : null),
+        namePickSubmitted:
+          phase?.type === 'name_pick'
+            ? (data.name_pick != null
+                ? data.name_pick.my_name != null
+                  && (data.name_pick.names ?? []).some((n) => n.display === data.name_pick!.my_name)
+                : state.namePickSubmitted)
+            : false,
         // Не затираем финальный result при re-sync: /state не возвращает
         // result, но в памяти он уже мог быть установлен через WS game_finished.
         result: data.result ?? state.result ?? null,
@@ -522,6 +540,20 @@ export const useGameStore = create<GameState>((set, get) => ({
         },
       };
     });
+  },
+
+  submitNamePick: async (name) => {
+    const state = get();
+    if (!state.sessionId) return;
+    await gameApi.namePick(state.sessionId, name);
+    set((s) => ({
+      namePickSubmitted: true,
+      namePick: s.namePick ? { ...s.namePick, my_name: name } : s.namePick,
+    }));
+    logger.info('game.name_pick_submit', 'Name pick submitted', {
+      sessionId: state.sessionId,
+      name,
+    }, { sessionId: state.sessionId });
   },
 
   acknowledgeRole: async () => {
@@ -690,6 +722,16 @@ export const useGameStore = create<GameState>((set, get) => ({
             : state.storyVote,
         storyVoteSubmitted: phase?.type === 'story_vote' ? state.storyVoteSubmitted : false,
         storyVoteTarget: phase?.type === 'story_vote' ? state.storyVoteTarget : null,
+        namePick:
+          phase?.type === 'name_pick'
+            ? {
+                names: phasePayload.names ?? state.namePick?.names ?? [],
+                taken: state.namePick?.taken ?? [],
+                my_name: state.namePick?.my_name ?? null,
+              }
+            : state.namePick,
+        namePickSubmitted:
+          phase?.type === 'name_pick' ? state.namePickSubmitted : false,
       };
     });
   },

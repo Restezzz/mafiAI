@@ -55,6 +55,11 @@ export default function StorySelectionPage() {
   const players = useSessionStore((s) => s.players);
   const myPlayerId = useSessionStore((s) => s.myPlayerId);
   const isHost = useSessionStore((s) => s.isHost);
+  // Новый сюжетный движок: имя выбирается серверной фазой name_pick ПОСЛЕ
+  // голосования за сюжет (из имён победившего сюжета), а не здесь из глобального
+  // каталога. Поэтому при use_story_engine локальный выбор имени пропускаем —
+  // эта страница работает только как комната ожидания прелоада озвучки.
+  const useStoryEngine = useSessionStore((s) => s.settings?.use_story_engine ?? false);
   const audioPreloadStatus = useSessionStore((s) => s.audioPreloadStatus);
   const setAudioPreloadStatus = useSessionStore((s) => s.setAudioPreloadStatus);
   const setSelectedStory = useSessionStore((s) => s.setSelectedStory);
@@ -110,10 +115,16 @@ export default function StorySelectionPage() {
   // Авто-переход из фазы показа сюжета в выбор имени.
   useEffect(() => {
     if (phase !== 'story') return;
+    if (useStoryEngine) {
+      // Сюжет определится голосованием — не закрепляем CLASSIC и не показываем
+      // вступительную карточку, сразу переходим в комнату ожидания.
+      setPhase('name-pick');
+      return;
+    }
     setSelectedStory(CLASSIC_STORY.id);
     const t = setTimeout(() => setPhase('name-pick'), STORY_DISPLAY_MS);
     return () => clearTimeout(t);
-  }, [phase, setSelectedStory]);
+  }, [phase, setSelectedStory, useStoryEngine]);
 
   // Таймер фазы выбора имени (локальный, синхронизация не критична — все клиенты
   // вошли на страницу практически одновременно в ответ на story_phase_started).
@@ -253,7 +264,7 @@ export default function StorySelectionPage() {
     setStarting(true);
     setStartError(null);
     try {
-      setSelectedStory(CLASSIC_STORY.id);
+      if (!useStoryEngine) setSelectedStory(CLASSIC_STORY.id);
       await gameApi.start(session.id);
       logger.info('story.selection_completed', 'Host started game after story phase', {
         sessionId: session.id,
@@ -274,11 +285,11 @@ export default function StorySelectionPage() {
   return (
     <div className="story-page">
       <GameScreenHeader
-        title={phase === 'story' ? 'Сюжет' : 'Выбор персонажа'}
+        title={phase === 'story' ? 'Сюжет' : useStoryEngine ? 'Подготовка' : 'Выбор персонажа'}
         showPause={false}
         showCharacterName={false}
         pauseSlot={<span className="story-header__spacer" />}
-        timer={phase === 'name-pick' ? <Timer seconds={nameTimer} dangerThreshold={10} /> : undefined}
+        timer={phase === 'name-pick' && !useStoryEngine ? <Timer seconds={nameTimer} dangerThreshold={10} /> : undefined}
       />
 
       <main className="story-main">
@@ -304,12 +315,16 @@ export default function StorySelectionPage() {
         {phase === 'name-pick' && (
           <div className="story-name-pick">
             <p className="story-name-pick__hint">
-              Выберите своё имя. Имена используются ведущим в озвучке.
+              {useStoryEngine
+                ? 'Готовим озвучку. После старта вы проголосуете за сюжет и выберете имя.'
+                : 'Выберите своё имя. Имена используются ведущим в озвучке.'}
             </p>
-            <div className="story-name-pick__current">
-              <span className="story-name-pick__current-label">Вы играете как:</span>
-              <span className="story-name-pick__current-name">{myName || '—'}</span>
-            </div>
+            {!useStoryEngine && (
+              <div className="story-name-pick__current">
+                <span className="story-name-pick__current-label">Вы играете как:</span>
+                <span className="story-name-pick__current-name">{myName || '—'}</span>
+              </div>
+            )}
             <div className={`story-audio story-audio--${audioUiState}`} role="status" aria-live="polite">
               <div className="story-audio__icon" aria-hidden="true">
                 {audioUiState === 'loading' && (
@@ -381,6 +396,7 @@ export default function StorySelectionPage() {
                 )}
               </div>
             </div>
+            {!useStoryEngine && (
             <div className="story-name-pick__grid">
               {NAMES.map((n) => {
                 const isMine = n.display === myName;
@@ -416,8 +432,9 @@ export default function StorySelectionPage() {
                 );
               })}
             </div>
+            )}
 
-            {renameError && (
+            {!useStoryEngine && renameError && (
               <Alert variant="error" compact>
                 {renameError}
               </Alert>
@@ -478,7 +495,7 @@ export default function StorySelectionPage() {
               {isHost ? (
                 <Button
                   onClick={handleStartGame}
-                  disabled={!myName || starting || !audioReadyForGame || audioPreloadProgress.failed > 0}
+                  disabled={(!useStoryEngine && !myName) || starting || !audioReadyForGame || audioPreloadProgress.failed > 0}
                   loading={starting}
                 >
                   {starting
@@ -493,6 +510,8 @@ export default function StorySelectionPage() {
                 <p className="story-name-pick__waiting">
                   {!audioReadyForGame
                     ? audioStatusText
+                    : useStoryEngine
+                    ? 'Ожидание хоста...'
                     : myName
                     ? 'Имя выбрано. Ожидание хоста...'
                     : 'Выберите своё имя'}

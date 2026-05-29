@@ -27,14 +27,21 @@ from models.player import Player
 from models.role import Role
 from models.session import Session
 from models.story import StoryRoleOverride
-from schemas.game import NightActionRequest, StoryVoteRequest, VoteRequest
+from schemas.game import (
+    NamePickRequest,
+    NightActionRequest,
+    StoryVoteRequest,
+    VoteRequest,
+)
 from services.game_engine import (
+    _name_pick_options,
     _player_target_dict,
     acknowledge_role,
     get_current_phase,
     resolve_votes,
     start_game,
     start_story_vote,
+    submit_name_pick,
     submit_story_vote,
     transition_to_voting,
 )
@@ -101,6 +108,23 @@ async def story_vote(
         raise GameError(403, "wrong_phase", "Действие недоступно в текущей фазе")
     player = await get_player_or_404(db, session_id, current_user.id)
     return await submit_story_vote(db, session, player, body.story_id)
+
+
+@router.post("/{session_id}/name-pick")
+async def name_pick(
+    session_id: uuid.UUID,
+    body: NamePickRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await get_session_or_404(db, session_id)
+    set_log_context(session_id=str(session_id), user_id=str(current_user.id))
+    if session_is_paused(session.settings):
+        raise GameError(403, "game_paused", "Игра на паузе")
+    if session.status != "active":
+        raise GameError(403, "wrong_phase", "Действие недоступно в текущей фазе")
+    player = await get_player_or_404(db, session_id, current_user.id)
+    return await submit_name_pick(db, session, player, body.name)
 
 
 @router.post("/{session_id}/acknowledge-role")
@@ -499,6 +523,13 @@ async def state(
     ):
         effective_timer_started_at = phase.started_at.isoformat()
         effective_timer_seconds = int((session.settings or {}).get("story_vote_timer_seconds") or 30)
+    if (
+        phase is not None
+        and phase.phase_type == "name_pick"
+        and (effective_timer_started_at is None or effective_timer_seconds is None)
+    ):
+        effective_timer_started_at = phase.started_at.isoformat()
+        effective_timer_seconds = int((session.settings or {}).get("name_pick_timer_seconds") or 60)
     if paused:
         gp_snap = ((session.settings or {}).get("game_pause") or {}).get("snapshot") or {}
         snap_remaining = gp_snap.get("remaining_seconds")
@@ -617,6 +648,15 @@ async def state(
             "voted": voted,
             "alive_total": alive_total,
             "my_vote": my_vote,
+        }
+
+    if phase and phase.phase_type == "name_pick":
+        options = await _name_pick_options(db, session)
+        taken = [p.name for p in all_players if p.id != player.id]
+        response["name_pick"] = {
+            "names": options,
+            "taken": taken,
+            "my_name": player.name,
         }
 
     # awaiting action during night turn

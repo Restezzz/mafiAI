@@ -1,0 +1,125 @@
+.name-pick {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+  max-width: 600px;
+  margin: 0 auto;
+  background: #000000;
+  color: #ffffff;
+  position: relative;
+
+  &__header-spacer {
+    display: inline-block;
+    width: 32px;
+  }
+
+  &__main {
+    flex: 1;
+    padding: 16px 20px;
+    overflow-y: auto;
+  }
+
+  &__hint {
+    margin: 0 0 16px;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.5);
+    text-align: center;
+    line-height: 1.5;
+  }
+
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 12px;
+  }
+
+  &__card {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 56px;
+    padding: 10px 14px;
+    border: 1.5px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.03);
+    color: #ffffff;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
+
+    &:hover:not(:disabled):not(.name-pick__card--selected) {
+      border-color: rgba(200, 30, 30, 0.35);
+      background: rgba(200, 30, 30, 0.05);
+    }
+
+    &--selected {
+      border-color: #c81e1e;
+      box-shadow: 0 0 16px rgba(200, 30, 30, 0.25);
+      background: rgba(200, 30, 30, 0.1);
+    }
+
+    &--taken {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+  }
+
+  &__card-name {
+    line-height: 1.2;
+  }
+
+  &__card-gender {
+    font-size: 12px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  &__card-check {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #c81e1e;
+    color: #ffffff;
+  }
+
+  &__card-tag {
+    position: absolute;
+    bottom: 4px;
+    right: 8px;
+    font-size: 10px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.5);
+  }
+
+  &__empty {
+    text-align: center;
+    color: rgba(255, 255, 255, 0.35);
+    margin-top: 40px;
+  }
+
+  &__footer {
+    padding: 16px 20px;
+    // Запас снизу, чтобы кнопка не уходила под плавающий микшер громкости.
+    padding-bottom: 80px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(10px);
+  }
+
+  &__error {
+    margin: 0 0 10px;
+    text-align: center;
+    font-size: 13px;
+    color: #ff4444;
+  }
+}

@@ -66,8 +66,18 @@ export interface CoverCrop {
 // Name variants (фича 1)
 // ============================================================================
 
+export interface StoryName {
+  id: string;
+  key: string;
+  display_name: string;
+  sort_order: number;
+  base_audio_file_id: string | null;
+  base_audio_url: string | null;
+  base_audio_filename: string | null;
+}
+
 export interface StoryNameVariantAsset {
-  name_asset_id: string;
+  story_name_id: string;
   display_name: string;
   audio_file_id: string | null;
   audio_url: string | null;
@@ -169,6 +179,8 @@ export interface StoryReadFull {
   cover_image_id: string | null;
   cover_url: string | null;
   cover_crop: CoverCrop | null;
+  // Имена пер-сюжет: собственный набор имён сюжета.
+  names: StoryName[];
   // Фичи 1, 2: варианты имён и переопределения ролей.
   name_variants: StoryNameVariant[];
   role_overrides: StoryRoleOverride[];
@@ -197,6 +209,20 @@ export interface StoryUpdatePayload {
   cover_image_id?: string | null;
   cover_crop?: CoverCrop | null;
   unset_cover?: boolean;
+}
+
+export interface StoryNameCreatePayload {
+  key: string;
+  display_name: string;
+  sort_order?: number;
+  base_audio_file_id?: string | null;
+}
+
+export interface StoryNameUpdatePayload {
+  display_name?: string;
+  sort_order?: number;
+  base_audio_file_id?: string | null;
+  unset_base_audio?: boolean;
 }
 
 export interface StoryNameVariantCreatePayload {
@@ -371,6 +397,18 @@ export const adminStoriesApi = {
   deleteImage: (imageId: string) =>
     httpClient.delete<void>(`/admin/images/${imageId}`),
 
+  // Story names (имена пер-сюжет): базовый набор имён сюжета
+  createStoryName: (storyId: string, payload: StoryNameCreatePayload) =>
+    httpClient.post<StoryName>(`${BASE}/${storyId}/names`, payload),
+  updateStoryName: (
+    storyId: string,
+    nameId: string,
+    payload: StoryNameUpdatePayload,
+  ) =>
+    httpClient.put<StoryName>(`${BASE}/${storyId}/names/${nameId}`, payload),
+  deleteStoryName: (storyId: string, nameId: string) =>
+    httpClient.delete<void>(`${BASE}/${storyId}/names/${nameId}`),
+
   // Name variants (фича 1)
   createNameVariant: (storyId: string, payload: StoryNameVariantCreatePayload) =>
     httpClient.post<StoryNameVariant>(`${BASE}/${storyId}/name-variants`, payload),
@@ -388,11 +426,11 @@ export const adminStoriesApi = {
   setNameVariantAsset: (
     storyId: string,
     variantId: string,
-    nameAssetId: string,
+    storyNameId: string,
     payload: StoryNameVariantAssetUpdatePayload,
   ) =>
     httpClient.put<StoryNameVariantAsset>(
-      `${BASE}/${storyId}/name-variants/${variantId}/assets/${nameAssetId}`,
+      `${BASE}/${storyId}/name-variants/${variantId}/assets/${storyNameId}`,
       payload,
     ),
 

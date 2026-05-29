@@ -19,7 +19,7 @@ class GamePhase(Base):
     __table_args__ = (
         UniqueConstraint("session_id", "phase_number", "phase_type", name="uq_phases_session_number_type"),
         CheckConstraint(
-            "phase_type IN ('role_reveal', 'day', 'night', 'story_vote')",
+            "phase_type IN ('role_reveal', 'day', 'night', 'story_vote', 'name_pick')",
             name="ck_phases_type",
         ),
         # Partial composite index для get_current_phase (#19): запрос

@@ -48,9 +48,20 @@ export interface StoryVoteInfo {
   my_vote: string | null;
 }
 
+export interface NamePickOption {
+  display: string;
+  gender: 'm' | 'f' | null;
+}
+
+export interface NamePickInfo {
+  names: NamePickOption[];
+  taken: string[];
+  my_name: string | null;
+}
+
 export interface Phase {
   id: string;
-  type: 'role_reveal' | 'night' | 'day' | 'story_vote';
+  type: 'role_reveal' | 'night' | 'day' | 'story_vote' | 'name_pick';
   number: number;
   sub_phase: 'discussion' | 'voting' | null;
   started_at: string;         // ISO 8601

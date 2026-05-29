@@ -33,3 +33,10 @@ class StoryVoteRequest(BaseModel):
 
     story_id: uuid.UUID
 
+
+class NamePickRequest(BaseModel):
+    """Тело запроса POST /sessions/{id}/name-pick (фаза name_pick)."""
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+
