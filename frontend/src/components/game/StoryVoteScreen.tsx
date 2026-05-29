@@ -7,7 +7,7 @@
  * Победитель определяется большинством (ничья → случайный лидер) на бэке.
  */
 import React, { useState } from 'react';
-import { Info, Check } from 'lucide-react';
+import { Info, Check, X } from 'lucide-react';
 import { useGameStore } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useCountdown } from '../../hooks/useCountdown';
@@ -51,16 +51,14 @@ function StoryCard({
   card,
   count,
   selected,
-  expanded,
   onSelect,
-  onToggleInfo,
+  onShowInfo,
 }: {
   card: StoryVoteCard;
   count: number;
   selected: boolean;
-  expanded: boolean;
   onSelect: () => void;
-  onToggleInfo: () => void;
+  onShowInfo: () => void;
 }) {
   return (
     <div
@@ -80,11 +78,12 @@ function StoryCard({
         className="story-vote__info-btn"
         onClick={(e) => {
           e.stopPropagation();
-          onToggleInfo();
+          onShowInfo();
         }}
+        onPointerDown={(e) => e.stopPropagation()}
         aria-label="Описание сюжета"
       >
-        <Info size={22} />
+        <Info size={20} />
       </button>
 
       <div
@@ -105,12 +104,49 @@ function StoryCard({
         <span className="story-vote__card-title">{card.name}</span>
         {count > 0 && <span className="story-vote__card-count">{count}</span>}
       </div>
+    </div>
+  );
+}
 
-      {expanded && (
-        <div className="story-vote__description" onClick={(e) => e.stopPropagation()}>
-          {card.description || 'Описание отсутствует.'}
+function StoryInfoModal({
+  card,
+  onClose,
+}: {
+  card: StoryVoteCard;
+  onClose: () => void;
+}) {
+  return (
+    <div className="story-info-overlay" onClick={onClose}>
+      <div
+        className="story-info-modal"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Описание сюжета: ${card.name}`}
+      >
+        <div
+          className="story-info-modal__cover"
+          style={coverBackgroundStyle(card.cover_url, card.cover_crop)}
+        >
+          {!card.cover_url && (
+            <span className="story-info-modal__cover-placeholder">{card.name}</span>
+          )}
+          <button
+            type="button"
+            className="story-info-modal__close"
+            onClick={onClose}
+            aria-label="Закрыть"
+          >
+            <X size={18} />
+          </button>
         </div>
-      )}
+        <div className="story-info-modal__body">
+          <h3 className="story-info-modal__title">{card.name}</h3>
+          <p className="story-info-modal__text">
+            {card.description || 'Описание отсутствует.'}
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -124,7 +160,7 @@ export default function StoryVoteScreen() {
   const timerPaused = useSessionStore((s) => s.timerPaused);
 
   const [selectedId, setSelectedId] = useState<string | null>(myVote);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [infoId, setInfoId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -141,6 +177,7 @@ export default function StoryVoteScreen() {
   const counts = storyVote?.counts ?? {};
   const voted = storyVote?.voted ?? 0;
   const aliveTotal = storyVote?.alive_total ?? 0;
+  const infoCard = stories.find((s) => s.id === infoId) ?? null;
 
   const handleConfirm = async () => {
     if (!selectedId || submitting) return;
@@ -178,11 +215,8 @@ export default function StoryVoteScreen() {
               card={card}
               count={counts[card.id] ?? 0}
               selected={selectedId === card.id}
-              expanded={expandedId === card.id}
               onSelect={() => !submitted && setSelectedId(card.id)}
-              onToggleInfo={() =>
-                setExpandedId((prev) => (prev === card.id ? null : card.id))
-              }
+              onShowInfo={() => setInfoId(card.id)}
             />
           ))}
         </div>
@@ -206,6 +240,10 @@ export default function StoryVoteScreen() {
           {submitted ? 'Голос принят' : 'Подтвердить выбор'}
         </Button>
       </footer>
+
+      {infoCard && (
+        <StoryInfoModal card={infoCard} onClose={() => setInfoId(null)} />
+      )}
     </div>
   );
 }

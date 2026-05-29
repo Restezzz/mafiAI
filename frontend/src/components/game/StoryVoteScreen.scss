@@ -2,8 +2,12 @@
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  background: #14161c;
-  color: #f0f0f0;
+  min-height: 100dvh;
+  max-width: 600px;
+  margin: 0 auto;
+  background: #000000;
+  color: #ffffff;
+  position: relative;
 
   &__header-spacer {
     display: inline-block;
@@ -12,15 +16,16 @@
 
   &__main {
     flex: 1;
-    padding: 16px;
+    padding: 16px 20px;
     overflow-y: auto;
   }
 
   &__hint {
     margin: 0 0 16px;
     font-size: 13px;
-    color: #9aa0aa;
+    color: rgba(255, 255, 255, 0.5);
     text-align: center;
+    line-height: 1.5;
   }
 
   &__grid {
@@ -31,41 +36,47 @@
 
   &__card {
     position: relative;
-    border: 2px solid #2c2f36;
-    border-radius: 12px;
+    border: 1.5px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
     overflow: hidden;
-    background: #1c1f26;
+    background: rgba(255, 255, 255, 0.03);
     cursor: pointer;
-    transition: border-color 0.15s, transform 0.1s;
+    transition: border-color 0.3s ease, box-shadow 0.3s ease, transform 0.1s ease;
 
-    &:hover {
-      border-color: #4a90e2;
+    &:hover:not(.story-vote__card--selected) {
+      border-color: rgba(200, 30, 30, 0.35);
+      background: rgba(200, 30, 30, 0.05);
     }
 
     &--selected {
-      border-color: #e2b04a;
-      box-shadow: 0 0 0 2px rgba(226, 176, 74, 0.4);
+      border-color: #c81e1e;
+      box-shadow: 0 0 16px rgba(200, 30, 30, 0.25);
+      background: rgba(200, 30, 30, 0.1);
     }
   }
 
   &__info-btn {
     position: absolute;
-    top: 6px;
-    right: 6px;
-    z-index: 2;
-    width: 40px;
-    height: 40px;
+    top: 8px;
+    right: 8px;
+    z-index: 3;
+    width: 36px;
+    height: 36px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border: none;
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 50%;
-    background: rgba(0, 0, 0, 0.55);
-    color: #fff;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(6px);
+    color: #ffffff;
     cursor: pointer;
+    padding: 0;
+    transition: background 0.2s ease, border-color 0.2s ease;
 
     &:hover {
-      background: rgba(74, 144, 226, 0.9);
+      background: rgba(200, 30, 30, 0.85);
+      border-color: rgba(200, 30, 30, 0.9);
     }
   }
 
@@ -73,7 +84,7 @@
     position: relative;
     width: 100%;
     aspect-ratio: 3 / 2;
-    background-color: #20242c;
+    background-color: #111111;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -81,7 +92,7 @@
 
   &__cover-placeholder {
     font-size: 14px;
-    color: #6a7080;
+    color: rgba(255, 255, 255, 0.35);
     padding: 8px;
     text-align: center;
   }
@@ -92,8 +103,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(226, 176, 74, 0.25);
-    color: #fff;
+    background: rgba(200, 30, 30, 0.3);
+    color: #ffffff;
   }
 
   &__card-body {
@@ -101,12 +112,13 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 8px 10px;
+    padding: 10px 12px;
   }
 
   &__card-title {
     font-size: 14px;
     font-weight: 600;
+    color: #ffffff;
   }
 
   &__card-count {
@@ -117,44 +129,138 @@
     align-items: center;
     justify-content: center;
     border-radius: 11px;
-    background: #e2b04a;
-    color: #14161c;
+    background: #c81e1e;
+    color: #ffffff;
     font-size: 12px;
     font-weight: 700;
   }
 
-  &__description {
-    padding: 10px;
-    font-size: 13px;
-    line-height: 1.4;
-    color: #c8ccd4;
-    border-top: 1px solid #2c2f36;
-    background: #181b21;
-  }
-
   &__empty {
     text-align: center;
-    color: #6a7080;
+    color: rgba(255, 255, 255, 0.35);
     margin-top: 40px;
   }
 
   &__footer {
-    padding: 16px;
-    border-top: 1px solid #2c2f36;
-    background: #181b21;
+    padding: 16px 20px;
+    // Запас снизу, чтобы кнопка не уходила под плавающий микшер громкости
+    // (.audio-controls--floating: bottom 16px, ~48px высотой).
+    padding-bottom: 80px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(10px);
   }
 
   &__progress {
     margin: 0 0 10px;
     text-align: center;
     font-size: 13px;
-    color: #9aa0aa;
+    color: rgba(255, 255, 255, 0.5);
   }
 
   &__error {
     margin: 0 0 10px;
     text-align: center;
     font-size: 13px;
-    color: #e25a5a;
+    color: #ff4444;
   }
+}
+
+// Модальное окно с описанием сюжета (по аналогии с RulesModal).
+.story-info-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 20px;
+  animation: story-info-fade-in 0.25s ease;
+}
+
+@keyframes story-info-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.story-info-modal {
+  background: #0a0a0a;
+  border: 1px solid rgba(200, 30, 30, 0.2);
+  border-radius: 20px;
+  max-width: 440px;
+  width: 100%;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: story-info-slide-up 0.25s ease;
+
+  &__cover {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    background-color: #111111;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  &__cover-placeholder {
+    font-size: 16px;
+    color: rgba(255, 255, 255, 0.35);
+    padding: 12px;
+    text-align: center;
+  }
+
+  &__close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(6px);
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    transition: all 0.2s ease;
+
+    &:hover {
+      border-color: rgba(200, 30, 30, 0.5);
+      color: #ff4444;
+    }
+  }
+
+  &__body {
+    padding: 18px 20px 22px;
+    overflow-y: auto;
+  }
+
+  &__title {
+    font-size: 20px;
+    font-weight: 700;
+    color: #ffffff;
+    margin: 0 0 10px;
+  }
+
+  &__text {
+    font-size: 14px;
+    line-height: 1.7;
+    color: rgba(255, 255, 255, 0.6);
+    margin: 0;
+    white-space: pre-wrap;
+  }
+}
+
+@keyframes story-info-slide-up {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
 }
