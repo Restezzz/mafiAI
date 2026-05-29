@@ -44,6 +44,7 @@ from schemas.story import (
     StoryCreate,
     StoryExport,
     StoryImportRequest,
+    StoryLayoutUpdate,
     StoryListItem,
     StoryListResponse,
     StoryNarrationCueCreate,
@@ -691,6 +692,60 @@ async def delete_step(
         logger, logging.INFO, "story.step_deleted",
         "Step deleted", step_id=str(step_id), by_user=str(admin.id),
     )
+
+
+@router.patch("/stories/{story_id}/layout", status_code=200)
+async def update_layout(
+    story_id: UUID,
+    payload: StoryLayoutUpdate,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, int]:
+    """Bulk-обновление позиций нод в node-редакторе (этап 4).
+
+    Принимает массив ``{step_id, position_x, position_y}`` и обновляет все
+    в одной транзакции. Защищает от типичной ошибки — обновления чужих
+    шагов: проверяет что все ``step_id`` принадлежат указанному сюжету.
+
+    Шаги, не указанные в payload, остаются нетронутыми (это batch-update,
+    не полная замена). Это позволяет фронту слать только сдвинутые ноды.
+    """
+    # Загрузим все указанные шаги одним запросом — чтобы потом проверить
+    # принадлежность к story и не делать N+1 на update.
+    requested_ids = {item.step_id for item in payload.positions}
+    if not requested_ids:
+        return {"updated": 0}
+
+    stmt = select(StoryStep).where(
+        StoryStep.story_id == story_id,
+        StoryStep.id.in_(requested_ids),
+    )
+    steps = (await db.scalars(stmt)).all()
+    found_ids = {s.id for s in steps}
+
+    missing = requested_ids - found_ids
+    if missing:
+        raise GameError(
+            404,
+            "step_not_found",
+            f"Шаги не найдены в сюжете: {sorted(str(i) for i in missing)}",
+        )
+
+    by_id = {s.id: s for s in steps}
+    for item in payload.positions:
+        step = by_id[item.step_id]
+        step.position_x = item.position_x
+        step.position_y = item.position_y
+
+    await db.commit()
+    log_event(
+        logger, logging.INFO, "story.layout_updated",
+        "Story layout updated",
+        story_id=str(story_id),
+        updated_count=len(payload.positions),
+        by_user=str(admin.id),
+    )
+    return {"updated": len(payload.positions)}
 
 
 # ============================================================================

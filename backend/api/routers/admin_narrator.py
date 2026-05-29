@@ -91,6 +91,7 @@ def _serialize_variant(v: NarratorVariant) -> VariantResponse:
         id=str(v.id),
         audio_file_id=str(v.audio_file_id) if v.audio_file_id else None,
         audio_url=_audio_url(v.audio_file),
+        audio_filename=v.audio_file.filename if v.audio_file else None,
         text=v.text,
         duration_ms=v.duration_ms,
         sort_order=v.sort_order,
@@ -807,10 +808,17 @@ async def list_audio_files(
     return AudioFilesListResponse(audio_files=[_serialize_audio_file(f) for f in files])
 
 
-# Whitelist content-types для multipart upload. ``audio/mp3`` некоторые
-# браузеры отдают вместо стандартного ``audio/mpeg`` (см. MDN).
-_ALLOWED_MP3_CONTENT_TYPES = {"audio/mpeg", "audio/mp3", "application/octet-stream"}
-# Максимальный размер mp3 (10 MB) — narrator-фразы короткие, защищаем диск.
+# Whitelist content-types для multipart upload.
+# Поддерживаем mp3, wav, ogg, flac, m4a и generic fallback.
+_ALLOWED_AUDIO_CONTENT_TYPES = {
+    "audio/mpeg", "audio/mp3",          # mp3
+    "audio/wav", "audio/x-wav", "audio/wave",  # wav
+    "audio/ogg", "audio/vorbis",        # ogg
+    "audio/flac", "audio/x-flac",       # flac
+    "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/aac",  # m4a/aac
+    "application/octet-stream",         # generic fallback
+}
+# Максимальный размер аудио (10 MB) — narrator-фразы короткие, защищаем диск.
 _MAX_MP3_BYTES = 10 * 1024 * 1024
 
 
@@ -832,8 +840,8 @@ async def upload_audio_file(
     """
     if file.filename is None:
         raise GameError(400, "filename_missing", "Не указано имя файла")
-    if file.content_type not in _ALLOWED_MP3_CONTENT_TYPES:
-        raise GameError(415, "unsupported_media_type", f"Ожидается mp3, получено {file.content_type!r}")
+    if file.content_type not in _ALLOWED_AUDIO_CONTENT_TYPES:
+        raise GameError(415, "unsupported_media_type", f"Ожидается аудио файл, получено {file.content_type!r}")
 
     filename = file.filename.strip()
     if not filename:

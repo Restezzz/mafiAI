@@ -62,6 +62,28 @@ async def _recover_one_session(session_id: uuid.UUID) -> None:
             session.story_id and (session.settings or {}).get("use_story_engine")
         )
         if use_story_engine:
+            # КРИТИЧНО: НЕ стартовать Story Engine во время role_reveal,
+            # пока `_enter_first_night_or_story` не вызвал start_story
+            # официально. Иначе recovery_loop создаст SessionStoryState
+            # сразу после game.started (раньше чем юзер нажмёт "Ознакомлен"),
+            # и narration сыграется БЕЗ user-gesture'а — браузер заблокирует
+            # autoplay → юзер не услышит звук. Признак "официально стартовал":
+            # в БД уже есть SessionStoryState.
+            from models.session_story_state import SessionStoryState
+            existing_state = await db.scalar(
+                select(SessionStoryState.session_id).where(
+                    SessionStoryState.session_id == session_id
+                )
+            )
+            if existing_state is None:
+                log_event(
+                    logger, logging.INFO, "recovery.story_engine_skipped",
+                    "Story Engine recovery skipped — state not yet initialised "
+                    "(role_reveal phase, awaiting acknowledge)",
+                    session_id=str(session_id),
+                )
+                return
+
             # Локальный импорт чтобы избежать импорта story_runtime в legacy
             # окружении без миграций Story Engine.
             try:

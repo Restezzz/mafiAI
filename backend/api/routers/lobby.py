@@ -438,11 +438,19 @@ async def update_settings(
         updated_fields=list(patch.keys()),
     )
 
+    # Включаем story_id (FK-колонка, не в jsonb) в ответ, чтобы фронт
+    # получил актуальное значение после смены сюжета.
+    response_settings = {**session.settings}
+    if session.story_id is not None:
+        response_settings["story_id"] = str(session.story_id)
+    else:
+        response_settings.pop("story_id", None)
+
     await ws_manager.send_to_session(
         session_id,
-        {"type": "settings_updated", "payload": {"settings": session.settings}},
+        {"type": "settings_updated", "payload": {"settings": response_settings}},
     )
-    return {"settings": session.settings}
+    return {"settings": response_settings}
 
 
 @router.post("/{session_id}/pause")

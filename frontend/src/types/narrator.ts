@@ -19,6 +19,7 @@ export interface Variant {
   id: string;
   audio_file_id: string | null;
   audio_url: string | null;
+  audio_filename: string | null;
   text: string;
   duration_ms: number | null;
   sort_order: number;

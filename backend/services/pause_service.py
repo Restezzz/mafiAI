@@ -129,6 +129,38 @@ async def resume_game(session_id: uuid.UUID) -> None:
             restored_blocked.add(u)
     rt.blocked_tonight = restored_blocked
 
+    # Story Engine: если сессия использует новый движок — перезапускаем
+    # его _run_loop через start_story (он идемпотентен и подхватит
+    # current_step_id из SessionStoryState). Skip legacy ptype-branch'ей,
+    # иначе получим параллельный запуск transition_to_night, который
+    # сыграет rules-narration и создаст лишнюю фазу.
+    async with async_session_factory() as db2:
+        sess2 = await db2.get(Session, session_id)
+        use_story = bool(
+            sess2 and sess2.story_id and (sess2.settings or {}).get("use_story_engine")
+        )
+    if use_story:
+        await ws_manager.send_to_session(
+            session_id,
+            {
+                "type": "game_resumed",
+                "payload": {
+                    "phase": {"type": ptype, "number": int(snap.get("phase_number") or 0)},
+                    "timer_seconds": rem,
+                    "timer_started_at": utc_now().isoformat(),
+                    "announcement": {"trigger": "game_resumed"},
+                },
+            },
+        )
+        from services.story_runtime import start_story
+        await start_story(session_id)
+        log_event(
+            logger, logging.INFO, "game.resumed",
+            "Story Engine resumed from pause",
+            session_id=str(session_id),
+        )
+        return
+
     if ptype == "role_reveal":
         from services.game_engine import transition_to_night
 

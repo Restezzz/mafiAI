@@ -214,6 +214,17 @@ export const adminStoriesApi = {
   deleteStep: (storyId: string, stepId: string) =>
     httpClient.delete<void>(`${BASE}/${storyId}/steps/${stepId}`),
 
+  // Bulk-обновление позиций нод (drag-and-drop в node-редакторе, этап 4).
+  // Без этого endpoint каждое движение мыши превращалось бы в N HTTP-запросов.
+  updateLayout: (
+    storyId: string,
+    positions: Array<{ step_id: string; position_x: number; position_y: number }>,
+  ) =>
+    httpClient.patch<{ updated: number }>(
+      `${BASE}/${storyId}/layout`,
+      { positions },
+    ),
+
   // Transitions
   createTransition: (storyId: string, payload: StoryTransitionCreatePayload) =>
     httpClient.post<StoryTransition>(`${BASE}/${storyId}/transitions`, payload),

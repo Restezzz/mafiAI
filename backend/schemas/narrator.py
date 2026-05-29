@@ -36,6 +36,7 @@ class VariantResponse(BaseModel):
     id: str
     audio_file_id: str | None
     audio_url: str | None = Field(default=None, description="Готовый URL mp3 (None если text-only)")
+    audio_filename: str | None = Field(default=None, description="Оригинальное имя загруженного файла")
     text: str
     duration_ms: int | None
     sort_order: int

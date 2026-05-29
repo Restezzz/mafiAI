@@ -284,6 +284,13 @@ export default function AdminStoryEditorPage() {
           </p>
         </div>
         <div className="admin-page-header__actions">
+          <Link
+            to={`/admin/stories/${story.id}`}
+            className="admin-btn admin-btn--primary"
+            title="Открыть в node-редакторе"
+          >
+            🪄 Граф-редактор
+          </Link>
           <Link to="/admin/stories" className="admin-btn">← К списку</Link>
         </div>
       </header>

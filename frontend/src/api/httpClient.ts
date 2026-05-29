@@ -6,7 +6,6 @@ import { logger, nextClientRequestId } from '../services/logger';
 
 const httpClient = axios.create({
   baseURL: `${API_BASE_URL}/api`,
-  headers: { 'Content-Type': 'application/json' },
 });
 
 // Флаг, предотвращающий параллельные refresh-запросы

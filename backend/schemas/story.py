@@ -206,6 +206,26 @@ class StoryNarrationCueUpdate(BaseModel):
     override_duration_ms: int | None = Field(default=None, ge=0, le=300_000)
 
 
+class StoryLayoutItem(BaseModel):
+    """Одна позиция ноды в bulk-апдейте layout (этап 4 — node editor)."""
+
+    step_id: UUID
+    position_x: int = Field(..., ge=-100_000, le=100_000)
+    position_y: int = Field(..., ge=-100_000, le=100_000)
+
+
+class StoryLayoutUpdate(BaseModel):
+    """Bulk-обновление позиций нод в node-редакторе сюжета.
+
+    Используется при drag-and-drop в xyflow-canvas. Без bulk-endpoint каждое
+    движение мыши превратилось бы в N HTTP-запросов (с 30-шаговым seed-сюжетом
+    это unusable). Frontend дебаунсит изменения и шлёт все позиции одной
+    транзакцией.
+    """
+
+    positions: list[StoryLayoutItem] = Field(..., max_length=500)
+
+
 class StoryNarrationCueReorderRequest(BaseModel):
     """Bulk reorder cues внутри одного step.
 

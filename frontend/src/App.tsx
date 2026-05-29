@@ -35,6 +35,7 @@ const NameAssetsPage = lazy(() => import('./pages/admin/NameAssetsPage'));
 const AdminUsersPage = lazy(() => import('./pages/admin/AdminUsersPage'));
 const AdminStoriesListPage = lazy(() => import('./pages/admin/AdminStoriesListPage'));
 const AdminStoryEditorPage = lazy(() => import('./pages/admin/AdminStoryEditorPage'));
+const AdminStoryGraphPage = lazy(() => import('./pages/admin/AdminStoryGraphPage'));
 const AdminSessionsPage = lazy(() => import('./pages/admin/AdminSessionsPage'));
 
 // Dev-only UI showcase page. В production-build lazy-импорт dead-code-elim-ится
@@ -127,7 +128,8 @@ const router = createBrowserRouter([
       { path: 'users', element: withSuspense(<AdminUsersPage />) },
       { path: 'sessions', element: withSuspense(<AdminSessionsPage />) },
       { path: 'stories', element: withSuspense(<AdminStoriesListPage />) },
-      { path: 'stories/:storyId', element: withSuspense(<AdminStoryEditorPage />) },
+      { path: 'stories/:storyId', element: withSuspense(<AdminStoryGraphPage />) },
+      { path: 'stories/:storyId/legacy', element: withSuspense(<AdminStoryEditorPage />) },
     ],
   },
   ...devRoutes,

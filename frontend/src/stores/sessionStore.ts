@@ -311,6 +311,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const sessionId = state.session?.id ?? gStore.getState().sessionId;
     if (!sessionId) return;
 
+    // Diagnostic: логируем call-stack чтобы поймать неожиданный источник
+    // (auto-test, browser ext, accidental keyboard event и т.п.). Будем
+    // удалять после того как разберёмся с pause-spam'ом в проде.
+    const stack = new Error().stack ?? '<no stack>';
+    logger.info('debug.setTimerPaused_called', 'setTimerPaused invoked', {
+      sessionId,
+      paused,
+      currentPaused: state.timerPaused,
+      stack: stack.split('\n').slice(1, 6).join(' | '),
+    }, { sessionId });
+
     // Optimistic update: мгновенно меняем UI чтобы пользователь не ждал
     // round-trip POST + WS broadcast (60-200ms на проде). Без этого хост
     // жмёт кнопку и видит "ничего не происходит" пока WS `game_paused`

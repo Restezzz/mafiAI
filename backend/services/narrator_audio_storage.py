@@ -16,6 +16,8 @@ import uuid
 from pathlib import Path
 from typing import BinaryIO
 
+import mutagen
+from mutagen import MutagenError
 from mutagen.mp3 import MP3, HeaderNotFoundError
 
 from core.config import settings
@@ -39,15 +41,29 @@ def _uploads_dir() -> Path:
 
 
 def probe_duration_ms(file_path: Path) -> int:
-    """Возвращает длительность mp3 в миллисекундах.
+    """Возвращает длительность аудио в миллисекундах.
+
+    Поддерживает mp3, wav, ogg, flac, m4a и другие форматы, распознаваемые mutagen.
 
     Raises:
-        GameError(400, 'invalid_mp3', ...) — если файл не mp3 или повреждён.
+        GameError(400, 'invalid_mp3', ...) — если файл не является валидным аудио.
     """
+    file_size = file_path.stat().st_size if file_path.exists() else 0
     try:
-        audio = MP3(str(file_path))
-    except HeaderNotFoundError as exc:
-        raise GameError(400, "invalid_mp3", "Файл не является валидным mp3") from exc
+        # Сначала пробуем generic parser (поддерживает wav, ogg, flac, m4a, mp3)
+        audio = mutagen.File(str(file_path))
+        if audio is None:
+            # mutagen не смог определить формат — пробуем как mp3 напрямую
+            audio = MP3(str(file_path))
+    except (HeaderNotFoundError, MutagenError) as exc:
+        logger.warning(
+            "audio.invalid_file path=%s size=%d error=%s",
+            file_path, file_size, exc,
+        )
+        raise GameError(
+            400, "invalid_mp3",
+            f"Файл не является валидным аудио (size={file_size}, error={exc!r})",
+        ) from exc
     duration_seconds = audio.info.length if audio.info else 0
     return int(round(duration_seconds * 1000))
 

@@ -74,9 +74,7 @@ export const adminNarratorApi = {
   uploadAudioFile: (file: File) => {
     const fd = new FormData();
     fd.append('file', file);
-    return httpClient.post<AudioFile>(`${BASE}/audio-files`, fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    return httpClient.post<AudioFile>(`${BASE}/audio-files`, fd);
   },
   deleteAudioFile: (id: string) => httpClient.delete(`${BASE}/audio-files/${id}`),
 
@@ -88,9 +86,7 @@ export const adminNarratorApi = {
     fd.append('display_name', params.display_name);
     fd.append('gender', params.gender);
     fd.append('file', params.file);
-    return httpClient.post<NameAsset>(`${BASE}/name-assets`, fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    return httpClient.post<NameAsset>(`${BASE}/name-assets`, fd);
   },
   updateNameAsset: (id: string, payload: NameAssetUpdatePayload) =>
     httpClient.put<NameAsset>(`${BASE}/name-assets/${id}`, payload),

@@ -64,6 +64,7 @@ from models.player import Player
 from models.role import Role
 from models.session import Session
 from models.session_story_state import SessionStoryState
+from models.narrator import NarratorTrigger, NarratorVariant
 from models.story import (
     Story,
     StoryNarrationCue,
@@ -554,6 +555,26 @@ async def _handle_narration(session_id: uuid.UUID, step: StoryStep) -> None:
         session = await db.get(Session, session_id)
         eff = await _load_effective_settings(db, session)
 
+        # Подгружаем варианты с аудио для каждого триггера cue (story-scoped
+        # триггеры из админки не лежат в audio_manifest.json, поэтому Story
+        # Engine резолвит их напрямую из БД и pre-fill'ит шаги).
+        trigger_ids = [c.trigger_id for c in cues if c.trigger_id is not None]
+        variants_by_trigger: dict[uuid.UUID, list[NarratorVariant]] = {}
+        if trigger_ids:
+            triggers = (
+                await db.scalars(
+                    select(NarratorTrigger)
+                    .where(NarratorTrigger.id.in_(trigger_ids))
+                    .options(
+                        selectinload(NarratorTrigger.variants).selectinload(
+                            NarratorVariant.audio_file
+                        )
+                    )
+                )
+            ).all()
+            for t in triggers:
+                variants_by_trigger[t.id] = list(t.variants)
+
         phase_payload = {
             "phase": {"type": phase.phase_type, "number": phase.phase_number},
             "sub_phase": None,
@@ -565,6 +586,8 @@ async def _handle_narration(session_id: uuid.UUID, step: StoryStep) -> None:
             karaoke=eff["karaoke"],
             multiplier=eff["multiplier"],
             inter_cue_pause_ms=int(eff["inter_cue_pause_seconds"] * 1000),
+            variants_by_trigger=variants_by_trigger,
+            session_id=session_id,
         )
         await _play_phase_announcements(
             session_id,
@@ -583,6 +606,8 @@ def _build_narration_steps(
     karaoke: bool = False,
     multiplier: float = 1.0,
     inter_cue_pause_ms: int = 0,
+    variants_by_trigger: dict[uuid.UUID, list[NarratorVariant]] | None = None,
+    session_id: uuid.UUID | None = None,
 ) -> list[dict[str, Any]]:
     """Преобразует ORM-cues в формат ожидаемый ``resolve_steps``.
 
@@ -590,36 +615,82 @@ def _build_narration_steps(
     steps_total / karaoke / post_pause_ms. ``trigger_slug`` берётся из
     relationship (eager loaded), fallback на None если триггер удалили.
 
-    ``multiplier`` (этап 3) умножает override_duration_ms (если задано) —
-    None оставляем None, тогда фронт/audio_manifest сам вычислит длительность
-    через mp3-длину (multiplier на это влияет на стороне фронта неявно через
-    хост, но мы сохраняем consistency).
+    Если для триггера cue есть варианты в ``variants_by_trigger`` —
+    выбираем один (seeded по session_id+cue.id для воспроизводимости) и
+    pre-fill'им ``audio_url`` / ``audio_file_name`` / ``duration_ms`` / ``text``
+    в шаге. ``resolve_steps`` в narration_audio.py видит уже резолвнутые
+    данные (триггер не в манифесте) и возвращает шаг как есть.
 
+    ``multiplier`` (этап 3) умножает duration_ms (override или из аудио).
     ``inter_cue_pause_ms`` добавляется в ``post_pause_ms`` каждого cue кроме
-    последнего — пауза между фразами одного narration-step. Сам cue также
-    может задавать ``pause_after_ms`` (per-cue), они складываются.
+    последнего.
     """
     total = len(cues)
     items: list[dict[str, Any]] = []
     for idx, cue in enumerate(cues, start=1):
         trigger_slug = cue.trigger.slug if cue.trigger else None
         scaled_duration = cue.override_duration_ms
-        if scaled_duration is not None and multiplier != 1.0:
-            scaled_duration = int(scaled_duration * multiplier)
-        # Per-cue pause_before/after — pause_after_ms (сейчас не используется
-        # в _wait_seconds_for, оставлено для будущего расширения).
+        override_text = cue.override_text
+
+        # Резолвим вариант из БД (если есть). Seed = (session_id, cue.id)
+        # чтобы повтор после крэша/реконнекта выбрал тот же вариант.
+        variant_audio_url: str | None = None
+        variant_audio_filename: str | None = None
+        variant_text: str | None = None
+        variant_duration_ms: int | None = None
+        if (
+            cue.trigger_id is not None
+            and variants_by_trigger
+            and cue.trigger_id in variants_by_trigger
+        ):
+            variants = variants_by_trigger[cue.trigger_id]
+            if variants:
+                seed = hash((str(session_id), str(cue.id))) if session_id else 0
+                chosen = variants[seed % len(variants)]
+                variant_text = chosen.text
+                variant_duration_ms = chosen.duration_ms
+                if chosen.audio_file is not None:
+                    variant_audio_url = f"/audio/{chosen.audio_file.storage_path}"
+                    variant_audio_filename = chosen.audio_file.filename
+                    # Если у варианта нет своего duration_ms, берём из аудио-файла.
+                    if variant_duration_ms is None:
+                        variant_duration_ms = chosen.audio_file.duration_ms
+
+        # duration_ms: override > variant > None (фронт fallback'нется на mp3)
+        effective_duration = scaled_duration
+        if effective_duration is None:
+            effective_duration = variant_duration_ms
+        if effective_duration is not None and multiplier != 1.0:
+            effective_duration = int(effective_duration * multiplier)
+
+        # text: override > variant > None
+        effective_text = override_text if override_text else variant_text
+
         post_pause = int(getattr(cue, "pause_after_ms", 0) or 0)
         if idx < total:
             post_pause += inter_cue_pause_ms
         item: dict[str, Any] = {
+            # Стабильный уникальный идентификатор announcement'а (per-cue).
+            # Фронт (useNarrationAudio / NarratorScreen / store dedup) завязан
+            # на announcement.key, чтобы перезапускать аудио-эффект при смене
+            # наррации внутри уже смонтированного NarratorScreen. Legacy-
+            # наррации (narration_script.py) всегда отдают key; Story Engine
+            # раньше его не слал → вторая и последующие наррации фазы шли с
+            # key=null, useNarrationAudio не перезапускал эффект и аудио немело.
+            "key": str(cue.id),
             "step_index": idx,
             "steps_total": total,
             "trigger": trigger_slug,
-            "text": cue.override_text,
-            "duration_ms": scaled_duration,
+            "text": effective_text,
+            "duration_ms": effective_duration,
             "karaoke": karaoke,
             "post_pause_ms": post_pause,
         }
+        # Pre-fill audio (если есть вариант с файлом) — resolve_steps не
+        # перезатрёт уже заполненные поля, если триггер не в манифесте.
+        if variant_audio_url:
+            item["audio_url"] = variant_audio_url
+            item["audio_file_name"] = variant_audio_filename
         items.append(item)
     return items
 
@@ -797,6 +868,9 @@ async def _handle_role_action(session_id: uuid.UUID, step: StoryStep) -> None:
         )
         return
 
+    # Auto-transition: role_action идёт в night-phase.
+    await _ensure_phase_for_step(session_id, expected_phase_type="night", via="auto_role_action")
+
     skip_if_dead = bool(payload.get("skip_if_dead", True))
     exclude_self = bool(payload.get("exclude_self_target", True))
     action_type = payload.get("action_type") or _ROLE_TO_ACTION_TYPE.get(role_slug)
@@ -911,9 +985,17 @@ async def _handle_discussion(session_id: uuid.UUID, step: StoryStep) -> None:
     step.payload.timer_setting (default 'discussion_timer_seconds').
     Фронт получает phase_changed с sub_phase='discussion' + timer info.
     По окончании timer — handler возвращается, executor advance'ит.
+
+    Auto-transition: если текущая фаза не 'day' (например, story стартовал
+    с narration в role_reveal и сразу попал на discussion без явного
+    phase_action: enter_day), автоматически создаём GamePhase day. Без этого
+    фронт остаётся на role_reveal-screen и показывает карточки ролей вместо
+    discussion screen.
     """
     payload = step.payload or {}
     timer_setting = payload.get("timer_setting") or "discussion_timer_seconds"
+
+    await _ensure_phase_for_step(session_id, expected_phase_type="day", via="auto_discussion")
 
     async with async_session_factory() as db:
         session = await db.get(Session, session_id)
@@ -954,9 +1036,13 @@ async def _handle_voting(session_id: uuid.UUID, step: StoryStep) -> None:
     Голоса собираются через POST /api/sessions/{id}/vote (legacy endpoint
     пишет в DayVote). По окончании timer — handler возвращается, day_resolve
     подсчитает.
+
+    Auto-transition: аналогично discussion, voting должен идти в day-phase.
     """
     payload = step.payload or {}
     timer_setting = payload.get("timer_setting") or "voting_timer_seconds"
+
+    await _ensure_phase_for_step(session_id, expected_phase_type="day", via="auto_voting")
 
     async with async_session_factory() as db:
         session = await db.get(Session, session_id)
@@ -1381,6 +1467,101 @@ async def _get_current_phase(
         .order_by(GamePhase.started_at.desc())
         .limit(1)
     )
+
+
+async def _ensure_phase_for_step(
+    session_id: uuid.UUID,
+    expected_phase_type: str,
+    *,
+    via: str,
+) -> None:
+    """Авто-транзишн в expected_phase_type если текущая фаза другая.
+
+    Используется handler'ами discussion/voting/role_action чтобы сюжетный
+    flow не падал, если автор сценария забыл явно добавить step с
+    phase_action: enter_day/enter_night.
+
+    Логика:
+      - Если текущая фаза уже expected_phase_type — no-op.
+      - Если нет — закрываем текущую (ставим ended_at) и создаём новую
+        GamePhase того же phase_number (или 1 если ещё не было).
+      - Шлём phase_changed чтобы фронт переключил deriveScreen.
+
+    Идемпотентен на случай recovery: если фаза уже создана с тем же type+number,
+    просто пропускаем.
+    """
+    async with async_session_factory() as db:
+        current = await _get_current_phase(db, session_id)
+        if current is not None and current.phase_type == expected_phase_type:
+            return  # уже в нужной фазе
+
+        # Определяем phase_number: для day берём номер ночи, для night +1.
+        # Для простоты: если перешли из role_reveal сразу в day — phase_number=1.
+        state = await _load_state(db, session_id)
+        current_phase_number = 0
+        if state and state.step_vars:
+            current_phase_number = int(state.step_vars.get("phase_number") or 0)
+
+        if expected_phase_type == "day":
+            next_number = max(current_phase_number, 1)
+        elif expected_phase_type == "night":
+            next_number = current_phase_number + 1
+        else:
+            next_number = current_phase_number or 1
+
+        # Идемпотентность: если такая фаза уже существует — переиспользуем.
+        existing = await db.scalar(
+            select(GamePhase).where(
+                GamePhase.session_id == session_id,
+                GamePhase.phase_type == expected_phase_type,
+                GamePhase.phase_number == next_number,
+            )
+        )
+        if existing is not None:
+            # Если она закрыта — переоткрываем (ended_at = None). Иначе просто
+            # выходим: всё уже как надо.
+            if existing.ended_at is not None:
+                existing.ended_at = None
+                await db.commit()
+            return
+
+        # Закрываем текущую фазу.
+        if current is not None and current.ended_at is None:
+            current.ended_at = utc_now()
+
+        new_phase = GamePhase(
+            id=uuid.uuid4(),
+            session_id=session_id,
+            phase_type=expected_phase_type,
+            phase_number=next_number,
+            started_at=utc_now(),
+            ended_at=None,
+        )
+        db.add(new_phase)
+
+        if state:
+            vars = dict(state.step_vars or {})
+            vars["phase_number"] = next_number
+            state.step_vars = vars
+
+        await db.commit()
+
+        phase_payload = {
+            "phase": {"type": expected_phase_type, "number": next_number},
+            "sub_phase": None,
+            "timer_seconds": None,
+            "timer_started_at": None,
+        }
+        await _emit_phase_changed(
+            session_id, phase_payload, db=db, phase_id=new_phase.id
+        )
+        log_event(
+            logger, logging.INFO, "story_engine.phase_auto_entered",
+            "Story Engine auto-transitioned phase",
+            session_id=str(session_id),
+            phase_type=expected_phase_type, phase_number=next_number,
+            via=via,
+        )
 
 
 def _player_target_dict(p: Player) -> dict[str, str]:

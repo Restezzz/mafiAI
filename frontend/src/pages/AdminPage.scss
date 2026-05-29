@@ -264,6 +264,12 @@ $admin-warning: #d4a046;
     padding: 4px 10px;
     font-size: 0.8rem;
   }
+
+  &--active {
+    background: $admin-accent;
+    border-color: $admin-accent;
+    color: #fff;
+  }
 }
 
 .admin-input,
