@@ -53,3 +53,7 @@ docker-compose.override.yml
 # монтируется как Docker volume; локально наполняется через migration script
 # или upload в админ-панели).
 audio_storage/
+
+# Хранилище картинок (обложки сюжетов, карточки ролей) — фича 3/2.
+# Аналогично audio_storage: файлы не коммитим.
+image_storage/

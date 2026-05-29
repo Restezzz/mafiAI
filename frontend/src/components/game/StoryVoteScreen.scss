@@ -1,0 +1,160 @@
+.story-vote {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: #14161c;
+  color: #f0f0f0;
+
+  &__header-spacer {
+    display: inline-block;
+    width: 32px;
+  }
+
+  &__main {
+    flex: 1;
+    padding: 16px;
+    overflow-y: auto;
+  }
+
+  &__hint {
+    margin: 0 0 16px;
+    font-size: 13px;
+    color: #9aa0aa;
+    text-align: center;
+  }
+
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 14px;
+  }
+
+  &__card {
+    position: relative;
+    border: 2px solid #2c2f36;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #1c1f26;
+    cursor: pointer;
+    transition: border-color 0.15s, transform 0.1s;
+
+    &:hover {
+      border-color: #4a90e2;
+    }
+
+    &--selected {
+      border-color: #e2b04a;
+      box-shadow: 0 0 0 2px rgba(226, 176, 74, 0.4);
+    }
+  }
+
+  &__info-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 2;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    cursor: pointer;
+
+    &:hover {
+      background: rgba(74, 144, 226, 0.9);
+    }
+  }
+
+  &__cover {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 3 / 2;
+    background-color: #20242c;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  &__cover-placeholder {
+    font-size: 14px;
+    color: #6a7080;
+    padding: 8px;
+    text-align: center;
+  }
+
+  &__check {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(226, 176, 74, 0.25);
+    color: #fff;
+  }
+
+  &__card-body {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  &__card-title {
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  &__card-count {
+    min-width: 22px;
+    height: 22px;
+    padding: 0 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 11px;
+    background: #e2b04a;
+    color: #14161c;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  &__description {
+    padding: 10px;
+    font-size: 13px;
+    line-height: 1.4;
+    color: #c8ccd4;
+    border-top: 1px solid #2c2f36;
+    background: #181b21;
+  }
+
+  &__empty {
+    text-align: center;
+    color: #6a7080;
+    margin-top: 40px;
+  }
+
+  &__footer {
+    padding: 16px;
+    border-top: 1px solid #2c2f36;
+    background: #181b21;
+  }
+
+  &__progress {
+    margin: 0 0 10px;
+    text-align: center;
+    font-size: 13px;
+    color: #9aa0aa;
+  }
+
+  &__error {
+    margin: 0 0 10px;
+    text-align: center;
+    font-size: 13px;
+    color: #e25a5a;
+  }
+}

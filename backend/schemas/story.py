@@ -32,6 +32,9 @@ from models.story import STORY_STEP_KINDS
 # для slug-полей story / story_steps.
 _SLUG_RE = re.compile(r"^[a-z0-9_]{1,80}$")
 
+# Ключ варианта произношения имени (фича 1): [a-z0-9_], 1..40 символов.
+_VARIANT_KEY_RE = re.compile(r"^[a-z0-9_]{1,40}$")
+
 
 # =============================================================================
 # Condition expressions (рекурсивные)
@@ -172,6 +175,9 @@ class StoryNarrationCueRead(BaseModel):
     pause_after_ms: int
     override_text: str | None
     override_duration_ms: int | None
+    # Фича 1: вариант произношения имени, который вставлять при озвучке
+    # имени игрока. None = дефолтное аудио имени.
+    name_variant_key: str | None = None
 
 
 class StoryNarrationCueCreate(BaseModel):
@@ -181,6 +187,7 @@ class StoryNarrationCueCreate(BaseModel):
     pause_after_ms: int = Field(default=0, ge=0, le=60_000)
     override_text: str | None = Field(default=None, max_length=4000)
     override_duration_ms: int | None = Field(default=None, ge=0, le=300_000)
+    name_variant_key: str | None = Field(default=None, max_length=40)
 
     @model_validator(mode="after")
     def _ensure_trigger_or_text(self) -> "StoryNarrationCueCreate":
@@ -204,6 +211,9 @@ class StoryNarrationCueUpdate(BaseModel):
     pause_after_ms: int | None = Field(default=None, ge=0, le=60_000)
     override_text: str | None = Field(default=None, max_length=4000)
     override_duration_ms: int | None = Field(default=None, ge=0, le=300_000)
+    name_variant_key: str | None = Field(default=None, max_length=40)
+    # Сбросить вариант имени в null (вернуться к дефолтному аудио).
+    unset_name_variant: bool = False
 
 
 class StoryLayoutItem(BaseModel):
@@ -252,6 +262,8 @@ StoryStepKind = Literal[
     "pause",
     "branch",
     "end",
+    "names",
+    "roles",
 ]
 
 
@@ -352,6 +364,129 @@ class StoryTransitionUpdate(BaseModel):
 
 
 # =============================================================================
+# Images / cover crop (фичи 2 и 3)
+# =============================================================================
+
+
+class ImageRead(BaseModel):
+    """Загруженная картинка для UI (id + url + размеры)."""
+
+    id: str
+    url: str
+    width: int | None = None
+    height: int | None = None
+    size_bytes: int
+
+
+class ImagesListResponse(BaseModel):
+    images: list[ImageRead]
+
+
+class CoverCrop(BaseModel):
+    """Прямоугольник кадрирования в долях [0..1] от оригинала."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    x: float = Field(..., ge=0, le=1)
+    y: float = Field(..., ge=0, le=1)
+    w: float = Field(..., gt=0, le=1)
+    h: float = Field(..., gt=0, le=1)
+
+
+# =============================================================================
+# Name variants (фича 1)
+# =============================================================================
+
+
+class StoryNameVariantAssetRead(BaseModel):
+    """mp3 конкретного имени для варианта."""
+
+    name_asset_id: str
+    display_name: str
+    audio_file_id: str | None = None
+    audio_url: str | None = None
+    audio_filename: str | None = None
+
+
+class StoryNameVariantRead(BaseModel):
+    id: str
+    key: str
+    label: str
+    sort_order: int
+    # Заполненные слоты (имя → аудио). Имена без аудио тоже включаются,
+    # чтобы UI показал все 15 строк.
+    assets: list[StoryNameVariantAssetRead] = []
+
+
+class StoryNameVariantCreate(BaseModel):
+    key: str = Field(..., min_length=1, max_length=40)
+    label: str = Field(default="", max_length=120)
+    sort_order: int = Field(default=0, ge=0, le=9999)
+
+    @field_validator("key")
+    @classmethod
+    def _validate_key(cls, v: str) -> str:
+        if not _VARIANT_KEY_RE.match(v):
+            raise ValueError("key должен быть [a-z0-9_], 1..40 символов")
+        return v
+
+
+class StoryNameVariantUpdate(BaseModel):
+    label: str | None = Field(default=None, max_length=120)
+    sort_order: int | None = Field(default=None, ge=0, le=9999)
+
+
+class StoryNameVariantAssetUpdate(BaseModel):
+    """Привязать/сменить/сбросить mp3 для пары (variant, name)."""
+
+    audio_file_id: UUID | None = None
+    unset_audio: bool = False
+
+
+# =============================================================================
+# Role overrides (фича 2)
+# =============================================================================
+
+
+class RoleCatalogItem(BaseModel):
+    """Роль из справочника (для UI ноды ролей)."""
+
+    slug: str
+    name: str
+    team: str
+
+
+class RolesCatalogResponse(BaseModel):
+    roles: list[RoleCatalogItem]
+
+
+class StoryRoleOverrideRead(BaseModel):
+    id: str
+    role_slug: str
+    display_name: str | None = None
+    card_front_image_id: str | None = None
+    card_front_url: str | None = None
+    card_back_image_id: str | None = None
+    card_back_url: str | None = None
+
+
+class StoryRoleOverrideCreate(BaseModel):
+    role_slug: str = Field(..., min_length=1, max_length=20)
+    display_name: str | None = Field(default=None, max_length=50)
+    card_front_image_id: UUID | None = None
+    card_back_image_id: UUID | None = None
+
+
+class StoryRoleOverrideUpdate(BaseModel):
+    display_name: str | None = Field(default=None, max_length=50)
+    unset_display_name: bool = False
+    card_front_image_id: UUID | None = None
+    unset_card_front: bool = False
+    card_back_image_id: UUID | None = None
+    unset_card_back: bool = False
+
+
+# =============================================================================
 # Story (root)
 # =============================================================================
 
@@ -398,6 +533,13 @@ class StoryReadFull(BaseModel):
     settings: StorySettingsRead | None = None
     steps: list[StoryStepRead] = []
     transitions: list[StoryTransitionRead] = []
+    # Фича 3: обложка сюжета для голосования.
+    cover_image_id: str | None = None
+    cover_url: str | None = None
+    cover_crop: CoverCrop | None = None
+    # Фича 1 / 2: варианты имён и переопределения ролей сюжета.
+    name_variants: list[StoryNameVariantRead] = []
+    role_overrides: list[StoryRoleOverrideRead] = []
 
 
 class StoryCreate(BaseModel):
@@ -405,6 +547,8 @@ class StoryCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     description: str | None = Field(default=None, max_length=4000)
     settings: StorySettingsUpdate | None = None
+    cover_image_id: UUID | None = None
+    cover_crop: CoverCrop | None = None
 
     @field_validator("slug")
     @classmethod
@@ -433,6 +577,11 @@ class StoryUpdate(BaseModel):
     # Этап 6.6: изоляция от global-namespace триггеров. None = не менять.
     use_only_own_triggers: bool | None = None
     entry_step_id: UUID | None = None
+    # Фича 3: обложка сюжета. cover_image_id=None + unset_cover=False → не
+    # менять; unset_cover=True → сбросить обложку и crop в null.
+    cover_image_id: UUID | None = None
+    cover_crop: CoverCrop | None = None
+    unset_cover: bool = False
 
 
 # =============================================================================

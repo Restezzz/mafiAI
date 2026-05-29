@@ -18,7 +18,10 @@ class GamePhase(Base):
 
     __table_args__ = (
         UniqueConstraint("session_id", "phase_number", "phase_type", name="uq_phases_session_number_type"),
-        CheckConstraint("phase_type IN ('role_reveal', 'day', 'night')", name="ck_phases_type"),
+        CheckConstraint(
+            "phase_type IN ('role_reveal', 'day', 'night', 'story_vote')",
+            name="ck_phases_type",
+        ),
         # Partial composite index для get_current_phase (#19): запрос
         # WHERE session_id=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1
         # становится O(log N) вместо seq scan'а.

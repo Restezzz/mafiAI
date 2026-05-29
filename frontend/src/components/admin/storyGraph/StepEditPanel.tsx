@@ -26,19 +26,25 @@ import {
   StoryStep,
   StoryNarrationCue,
   StoryNarrationCueCreatePayload,
+  StoryNameVariant,
+  StoryReadFull,
 } from '../../../api/adminStoriesApi';
 import { adminNarratorApi } from '../../../api/adminNarratorApi';
 import { AudioFile, Trigger, Variant } from '../../../types/narrator';
 import { logger } from '../../../services/logger';
 import { parseApiError } from '../../../utils/parseApiError';
 import { API_BASE_URL } from '../../../utils/constants';
+import NamesNodePanel from './NamesNodePanel';
+import RolesNodePanel from './RolesNodePanel';
 import './StepEditPanel.scss';
 
 interface Props {
   storyId: string;
   step: StoryStep;
+  story: StoryReadFull | null;
   onClose: () => void;
   onStepUpdated: (step: StoryStep) => void;
+  onStoryChanged: () => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -242,6 +248,7 @@ function CueEditor({
   storyId,
   globalTriggers,
   triggerMap,
+  nameVariants,
   onCueUpdated,
   onDelete,
 }: {
@@ -249,6 +256,7 @@ function CueEditor({
   storyId: string;
   globalTriggers: Trigger[];
   triggerMap: Map<string, Trigger>;
+  nameVariants: StoryNameVariant[];
   onCueUpdated: (cue: StoryNarrationCue) => void;
   onDelete: () => void;
 }) {
@@ -305,6 +313,17 @@ function CueEditor({
     if (!triggerId) return;
     try {
       const res = await adminStoriesApi.updateCue(storyId, cue.id, { trigger_id: triggerId });
+      onCueUpdated(res.data);
+    } catch {}
+  };
+
+  const handleNameVariantSelect = async (key: string) => {
+    try {
+      const res = await adminStoriesApi.updateCue(
+        storyId,
+        cue.id,
+        key ? { name_variant_key: key } : { unset_name_variant: true },
+      );
       onCueUpdated(res.data);
     } catch {}
   };
@@ -532,6 +551,24 @@ function CueEditor({
             <span>Триггер не выбран</span>
           </div>
         )}
+
+        {nameVariants.length > 0 && (
+          <div className="step-edit-panel__cue-name-variant">
+            <label>Имя между фразами</label>
+            <select
+              className="admin-select"
+              value={cue.name_variant_key ?? ''}
+              onChange={(e) => handleNameVariantSelect(e.target.value)}
+            >
+              <option value="">— без имени —</option>
+              {nameVariants.map((v) => (
+                <option key={v.key} value={v.key}>
+                  {v.label ? `${v.label} (${v.key})` : v.key}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
       <button
         type="button"
@@ -548,7 +585,7 @@ function CueEditor({
 /* ------------------------------------------------------------------ */
 /*  Main panel                                                        */
 /* ------------------------------------------------------------------ */
-export default function StepEditPanel({ storyId, step, onClose, onStepUpdated }: Props) {
+export default function StepEditPanel({ storyId, step, story, onClose, onStepUpdated, onStoryChanged }: Props) {
   const [label, setLabel] = useState(step.label);
   const [slug, setSlug] = useState(step.slug);
   const [cues, setCues] = useState<StoryNarrationCue[]>(step.cues);
@@ -636,6 +673,7 @@ export default function StepEditPanel({ storyId, step, onClose, onStepUpdated }:
   // Only show global triggers in the trigger dropdown (not auto-triggers)
   const globalTriggers = triggers.filter((t) => t.story_id === null);
   const triggerMap = new Map(triggers.map((t) => [t.id, t]));
+  const nameVariants = story?.name_variants ?? [];
 
   return (
     <div className="step-edit-panel">
@@ -678,7 +716,19 @@ export default function StepEditPanel({ storyId, step, onClose, onStepUpdated }:
 
         <div className="step-edit-panel__divider" />
 
-        {isNarration ? (
+        {step.kind === 'names' ? (
+          <NamesNodePanel
+            storyId={storyId}
+            story={story as StoryReadFull}
+            onStoryChanged={onStoryChanged}
+          />
+        ) : step.kind === 'roles' ? (
+          <RolesNodePanel
+            storyId={storyId}
+            story={story as StoryReadFull}
+            onStoryChanged={onStoryChanged}
+          />
+        ) : isNarration ? (
         <div className="step-edit-panel__section">
           <div className="step-edit-panel__section-header">
             <Mic size={14} />
@@ -710,6 +760,7 @@ export default function StepEditPanel({ storyId, step, onClose, onStepUpdated }:
                   storyId={storyId}
                   globalTriggers={globalTriggers}
                   triggerMap={triggerMap}
+                  nameVariants={nameVariants}
                   onCueUpdated={handleCueUpdated}
                   onDelete={() => handleDeleteCue(cue.id)}
                 />

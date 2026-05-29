@@ -447,9 +447,45 @@ async def check_win_condition(db: AsyncSession, session_id: uuid.UUID) -> str | 
     return None
 
 
+_ROLE_SLOTS = ("mafia", "don", "sheriff", "doctor", "lover", "maniac", "civilian")
+
+
+def _validate_start_config(session: Session, players: list[Player]) -> dict[str, int]:
+    """Валидирует role_config против числа игроков. Возвращает счётчики ролей.
+
+    Используется и в обычном старте, и перед голосованием за сюжет, чтобы
+    хост получил ошибку конфигурации сразу, а не после голосования.
+    """
+    role_cfg = (session.settings or {}).get("role_config") or {}
+    cfg = {slot: int(role_cfg.get(slot, 0)) for slot in _ROLE_SLOTS}
+
+    total_special = sum(cfg.values())
+    if len(players) < total_special:
+        raise GameError(
+            400, "insufficient_players", "Недостаточно игроков для выбранной конфигурации"
+        )
+
+    mafia_count = cfg["mafia"] + cfg["don"]
+    city_count = len(players) - mafia_count - cfg["maniac"]
+    if mafia_count >= city_count:
+        raise GameError(
+            400, "invalid_role_config", "Мафия должна быть строго меньше города"
+        )
+    return cfg
+
+
 async def start_game(db: AsyncSession, session: Session) -> None:
     if session.status != "waiting":
         raise GameError(409, "game_already_started", "Игра уже началась")
+    await _run_role_reveal(db, session)
+
+
+async def _run_role_reveal(db: AsyncSession, session: Session) -> None:
+    """Раздаёт роли, создаёт role_reveal фазу и рассылает WS.
+
+    Выделено из ``start_game`` чтобы переиспользовать после голосования за
+    сюжет (фаза ``story_vote`` → выбор story_id → role_reveal).
+    """
     await ensure_audio_preload_ready(db, session)
 
     players = list(
@@ -460,24 +496,13 @@ async def start_game(db: AsyncSession, session: Session) -> None:
     # чтобы озвучка нашла аудиофайл для его имени. WS-уведомления отправляем
     # после commit.
     auto_renamed = await _autofill_unselected_names(db, session, players)
-    role_cfg = (session.settings or {}).get("role_config") or {}
-    mafia = int(role_cfg.get("mafia", 0))
-    don = int(role_cfg.get("don", 0))
-    sheriff = int(role_cfg.get("sheriff", 0))
-    doctor = int(role_cfg.get("doctor", 0))
-    lover = int(role_cfg.get("lover", 0))
-    maniac = int(role_cfg.get("maniac", 0))
-    civilian = int(role_cfg.get("civilian", 0))
-
-    total_special = mafia + don + sheriff + doctor + lover + maniac + civilian
-    if len(players) < total_special:
-        raise GameError(400, "insufficient_players", "Недостаточно игроков для выбранной конфигурации")
-
-    mafia_count = mafia + don
-    # city_count (для валидации баланса): все кроме мафии и маньяков.
-    city_count = len(players) - mafia_count - maniac
-    if mafia_count >= city_count:
-        raise GameError(400, "invalid_role_config", "Мафия должна быть строго меньше города")
+    cfg = _validate_start_config(session, players)
+    mafia = cfg["mafia"]
+    don = cfg["don"]
+    sheriff = cfg["sheriff"]
+    doctor = cfg["doctor"]
+    lover = cfg["lover"]
+    maniac = cfg["maniac"]
 
     required_slugs = ["mafia", "don", "sheriff", "doctor", "lover", "maniac", "civilian"]
     roles = (await db.scalars(select(Role).where(Role.slug.in_(required_slugs)))).all()
@@ -584,6 +609,265 @@ async def start_game(db: AsyncSession, session: Session) -> None:
         asyncio.create_task(_enter_first_night_or_story(session.id))
 
     await timer_service.start_timer(session.id, "role_reveal", timer_seconds, _on_role_reveal_timeout)
+
+
+# ----------------------------------------------------------------------------
+# Фича 3: голосование за сюжет (фаза story_vote перед role_reveal).
+# ----------------------------------------------------------------------------
+
+STORY_VOTE_DEFAULT_TIMER = 30
+
+
+async def _votable_stories(db: AsyncSession) -> list[Story]:
+    """Активные не-obsolete сюжеты для голосования (с обложкой)."""
+    from models.story import Story as _Story
+
+    return list(
+        (
+            await db.scalars(
+                select(_Story)
+                .where(_Story.is_active.is_(True), _Story.is_obsolete.is_(False))
+                .options(selectinload(_Story.cover_image))
+                .order_by(_Story.slug)
+            )
+        ).all()
+    )
+
+
+def _story_vote_card(s: "Story") -> dict:
+    cover = getattr(s, "cover_image", None)
+    return {
+        "id": str(s.id),
+        "slug": s.slug,
+        "name": s.name,
+        "description": s.description,
+        "cover_url": f"/images/{cover.storage_path}" if cover else None,
+        "cover_crop": s.cover_crop,
+    }
+
+
+async def _tally_story_votes(
+    db: AsyncSession, session_id: uuid.UUID, phase_id: uuid.UUID
+) -> tuple[dict[str, int], int]:
+    """Считает голоса (последний голос игрока учитывается один раз).
+
+    Возвращает ``({story_id: count}, voted_players)``.
+    """
+    events = (
+        await db.scalars(
+            select(GameEvent)
+            .where(
+                GameEvent.session_id == session_id,
+                GameEvent.phase_id == phase_id,
+                GameEvent.event_type == "story_vote",
+            )
+            .order_by(GameEvent.created_at)
+        )
+    ).all()
+    by_player: dict[str, str] = {}
+    for ev in events:
+        pid = (ev.payload or {}).get("player_id")
+        sid = (ev.payload or {}).get("story_id")
+        if pid and sid:
+            by_player[pid] = sid
+    counts: dict[str, int] = {}
+    for sid in by_player.values():
+        counts[sid] = counts.get(sid, 0) + 1
+    return counts, len(by_player)
+
+
+async def start_story_vote(db: AsyncSession, session: Session) -> dict:
+    """Запускает фазу голосования за сюжет вместо немедленного role_reveal.
+
+    Если votable-сюжетов <=1 — голосовать не за что: фиксируем единственный
+    (или None) и сразу раздаём роли.
+    """
+    if session.status != "waiting":
+        raise GameError(409, "game_already_started", "Игра уже началась")
+
+    players = list(
+        (await db.scalars(select(Player).where(Player.session_id == session.id))).all()
+    )
+    _validate_start_config(session, players)
+
+    stories = await _votable_stories(db)
+    if len(stories) <= 1:
+        session.story_id = stories[0].id if stories else None
+        await db.commit()
+        await _run_role_reveal(db, session)
+        return {"status": "active", "phase": {"type": "role_reveal", "number": 0}}
+
+    phase = GamePhase(
+        id=uuid.uuid4(),
+        session_id=session.id,
+        phase_type="story_vote",
+        phase_number=0,
+        started_at=utc_now(),
+        ended_at=None,
+    )
+    db.add(phase)
+    session.status = "active"
+    session.story_id = None
+    db.add(
+        GameEvent(
+            id=uuid.uuid4(),
+            session_id=session.id,
+            phase_id=phase.id,
+            event_type="story_vote_started",
+            payload={"phase": {"type": "story_vote", "number": 0}},
+        )
+    )
+    await db.commit()
+
+    timer_seconds = int(
+        (session.settings or {}).get("story_vote_timer_seconds")
+        or STORY_VOTE_DEFAULT_TIMER
+    )
+    rt = runtime_state.get(session.id)
+    rt.timer_name = "story_vote"
+    rt.timer_seconds = timer_seconds
+    rt.timer_started_at = phase.started_at
+
+    await ws_manager.send_to_session(
+        session.id,
+        {
+            "type": "phase_changed",
+            "payload": {
+                "phase": {"type": "story_vote", "number": 0},
+                "timer_seconds": timer_seconds,
+                "started_at": phase.started_at.isoformat(),
+                "stories": [_story_vote_card(s) for s in stories],
+            },
+        },
+    )
+
+    async def _on_story_vote_timeout():
+        asyncio.create_task(resolve_story_vote(session.id))
+
+    await timer_service.start_timer(
+        session.id, "story_vote", timer_seconds, _on_story_vote_timeout
+    )
+    log_event(
+        logger,
+        logging.INFO,
+        "story_vote.started",
+        "Story vote phase started",
+        session_id=str(session.id),
+        options=len(stories),
+    )
+    return {"status": "active", "phase": {"type": "story_vote", "number": 0}}
+
+
+async def submit_story_vote(
+    db: AsyncSession, session: Session, player: Player, story_id: uuid.UUID
+) -> dict:
+    phase = await get_current_phase(db, session.id)
+    if not phase or phase.phase_type != "story_vote":
+        raise GameError(403, "wrong_phase", "Голосование за сюжет недоступно")
+    if player.status != "alive":
+        raise GameError(403, "player_dead", "Выбывшие игроки не могут голосовать")
+
+    stories = await _votable_stories(db)
+    valid_ids = {str(s.id) for s in stories}
+    if str(story_id) not in valid_ids:
+        raise GameError(404, "story_not_found", "Сюжет недоступен для голосования")
+
+    already = await db.scalar(
+        select(GameEvent.id).where(
+            GameEvent.session_id == session.id,
+            GameEvent.phase_id == phase.id,
+            GameEvent.event_type == "story_vote",
+            GameEvent.payload["player_id"].astext == str(player.id),
+        )
+    )
+    if already is not None:
+        raise GameError(409, "action_already_submitted", "Вы уже проголосовали")
+
+    db.add(
+        GameEvent(
+            id=uuid.uuid4(),
+            session_id=session.id,
+            phase_id=phase.id,
+            event_type="story_vote",
+            payload={"player_id": str(player.id), "story_id": str(story_id)},
+        )
+    )
+    await db.commit()
+
+    counts, voted = await _tally_story_votes(db, session.id, phase.id)
+    alive_total = int(
+        await db.scalar(
+            select(func.count(Player.id)).where(
+                Player.session_id == session.id, Player.status == "alive"
+            )
+        )
+        or 0
+    )
+    await ws_manager.send_to_session(
+        session.id,
+        {
+            "type": "story_vote_update",
+            "payload": {
+                "counts": counts,
+                "voted": voted,
+                "alive_total": alive_total,
+            },
+        },
+    )
+    if voted >= alive_total and alive_total > 0:
+        await timer_service.cancel_timer(session.id, "story_vote")
+        asyncio.create_task(resolve_story_vote(session.id))
+    return {"ok": True}
+
+
+async def resolve_story_vote(session_id: uuid.UUID) -> None:
+    """Подводит итог голосования: большинство, при ничьей — случайный лидер.
+
+    Без голосов — случайный сюжет из доступных. Затем закрывает фазу
+    story_vote, фиксирует ``session.story_id`` и переходит к role_reveal.
+    """
+    from core.database import async_session_factory
+
+    async with async_session_factory() as db:
+        session = await db.get(Session, session_id)
+        if session is None:
+            return
+        phase = await get_current_phase(db, session_id)
+        if phase is None or phase.phase_type != "story_vote":
+            return  # уже разрешено
+
+        stories = await _votable_stories(db)
+        chosen_id: str | None = None
+        if stories:
+            counts, _ = await _tally_story_votes(db, session_id, phase.id)
+            if counts:
+                top = max(counts.values())
+                leaders = [sid for sid, c in counts.items() if c == top]
+                chosen_id = random.choice(leaders)
+            else:
+                chosen_id = random.choice([str(s.id) for s in stories])
+
+        session.story_id = uuid.UUID(chosen_id) if chosen_id else None
+        phase.ended_at = utc_now()
+        await db.commit()
+
+        await timer_service.cancel_timer(session_id, "story_vote")
+        await ws_manager.send_to_session(
+            session_id,
+            {
+                "type": "story_vote_result",
+                "payload": {"story_id": chosen_id},
+            },
+        )
+        log_event(
+            logger,
+            logging.INFO,
+            "story_vote.resolved",
+            "Story vote resolved",
+            session_id=str(session_id),
+            story_id=chosen_id,
+        )
+        await _run_role_reveal(db, session)
 
 
 async def acknowledge_role(db: AsyncSession, session: Session, player: Player) -> dict:

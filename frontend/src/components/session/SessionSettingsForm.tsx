@@ -66,7 +66,6 @@ export default function SessionSettingsForm({
   }, []);
 
   const useStoryEngine = settings.use_story_engine === true;
-  const currentStoryId = settings.story_id ?? '';
 
   return (
     <div className={classes}>
@@ -194,14 +193,12 @@ export default function SessionSettingsForm({
               checked={useStoryEngine}
               onChange={(e) => {
                 const enabled = e.target.checked;
-                // При включении автоматически выбираем первый доступный
-                // сюжет, если ничего не выбрано — иначе бэк отклонит запуск
-                // (story_id обязателен при use_story_engine=true).
-                const nextStoryId =
-                  enabled && !currentStoryId ? stories[0].id : currentStoryId || null;
+                // Конкретный сюжет теперь выбирается голосованием после
+                // запуска лобби, поэтому story_id заранее не фиксируем —
+                // сбрасываем его в null при переключении тоггла.
                 onChangeTimers({
                   use_story_engine: enabled,
-                  story_id: nextStoryId,
+                  story_id: null,
                 });
               }}
             />
@@ -209,21 +206,9 @@ export default function SessionSettingsForm({
           </label>
           {useStoryEngine && (
             <>
-              <label className="settings-form__story-select">
-                <span className="settings-form__story-select-label">Сюжет</span>
-                <select
-                  value={currentStoryId}
-                  onChange={(e) =>
-                    onChangeTimers({ story_id: e.target.value || null })
-                  }
-                >
-                  {stories.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} (v{s.version})
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <p className="settings-form__story-hint">
+                Сюжет выбирается голосованием игроков после запуска лобби.
+              </p>
               {/*
                 Pre-game overrides (этап 3). null = используется дефолт сюжета.
                 Слайдеры показывают override; чтобы вернуть дефолт — кнопка

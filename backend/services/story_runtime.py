@@ -64,9 +64,16 @@ from models.player import Player
 from models.role import Role
 from models.session import Session
 from models.session_story_state import SessionStoryState
-from models.narrator import NarratorTrigger, NarratorVariant
+from models.narrator import (
+    NarratorAudioFile,
+    NarratorNameAsset,
+    NarratorTrigger,
+    NarratorVariant,
+)
 from models.story import (
     Story,
+    StoryNameVariant,
+    StoryNameVariantAsset,
     StoryNarrationCue,
     StorySettings,
     StoryStep,
@@ -575,6 +582,19 @@ async def _handle_narration(session_id: uuid.UUID, step: StoryStep) -> None:
             for t in triggers:
                 variants_by_trigger[t.id] = list(t.variants)
 
+        # Фича 1: инъекция варианта произношения имени. Если хоть у одной cue
+        # задан name_variant_key — резолвим аудио имени жертвы (из step_vars,
+        # выставленного предыдущим night/day_resolve) под нужный вариант.
+        name_audio_by_variant: dict[str, NarratorAudioFile] = {}
+        target_player_name: str | None = None
+        if any(c.name_variant_key for c in cues) and session and session.story_id:
+            target_player_name, name_audio_by_variant = await _resolve_variant_name_audio(
+                db,
+                session_id=session_id,
+                story_id=session.story_id,
+                variant_keys={c.name_variant_key for c in cues if c.name_variant_key},
+            )
+
         phase_payload = {
             "phase": {"type": phase.phase_type, "number": phase.phase_number},
             "sub_phase": None,
@@ -588,6 +608,8 @@ async def _handle_narration(session_id: uuid.UUID, step: StoryStep) -> None:
             inter_cue_pause_ms=int(eff["inter_cue_pause_seconds"] * 1000),
             variants_by_trigger=variants_by_trigger,
             session_id=session_id,
+            name_audio_by_variant=name_audio_by_variant,
+            target_player_name=target_player_name,
         )
         await _play_phase_announcements(
             session_id,
@@ -599,6 +621,70 @@ async def _handle_narration(session_id: uuid.UUID, step: StoryStep) -> None:
         )
 
 
+async def _resolve_variant_name_audio(
+    db: AsyncSession,
+    *,
+    session_id: uuid.UUID,
+    story_id: uuid.UUID,
+    variant_keys: set[str],
+) -> tuple[str | None, dict[str, NarratorAudioFile]]:
+    """Резолвит аудио имени жертвы под каждый вариант произношения.
+
+    Возвращает ``(target_player_name, {variant_key: NarratorAudioFile})``.
+
+    Целевое имя берётся из ``step_vars.died_player_name`` (выставляется
+    night/day_resolve). Для каждого ``variant_key`` ищется ассет варианта
+    с привязанным аудио для соответствующего имени каталога. Если для пары
+    (variant, name) аудио не задано — ключ просто отсутствует в результате
+    (рантайм фолбэкнется на дефолтное аудио имени).
+    """
+    state = await _load_state(db, session_id)
+    target_name: str | None = None
+    if state and state.step_vars:
+        raw = state.step_vars.get("died_player_name")
+        if isinstance(raw, str) and raw.strip():
+            target_name = raw.strip()
+    if not target_name:
+        return None, {}
+
+    # name_asset по display_name (case-insensitive), c дефолтным аудио имени.
+    name_asset = await db.scalar(
+        select(NarratorNameAsset)
+        .where(func.lower(NarratorNameAsset.display_name) == target_name.lower())
+        .options(selectinload(NarratorNameAsset.audio_file))
+    )
+    if name_asset is None:
+        return target_name, {}
+    default_audio: NarratorAudioFile | None = name_asset.audio_file
+
+    variants = (
+        await db.scalars(
+            select(StoryNameVariant)
+            .where(
+                StoryNameVariant.story_id == story_id,
+                StoryNameVariant.key.in_(variant_keys),
+            )
+            .options(
+                selectinload(StoryNameVariant.assets).selectinload(
+                    StoryNameVariantAsset.audio_file
+                )
+            )
+        )
+    ).all()
+
+    by_key: dict[str, NarratorAudioFile] = {}
+    for variant in variants:
+        for asset in variant.assets:
+            if asset.name_asset_id == name_asset.id and asset.audio_file is not None:
+                by_key[variant.key] = asset.audio_file
+                break
+    # Фолбэк на дефолтное аудио имени для ключей без своего варианта.
+    if default_audio is not None:
+        for key in variant_keys:
+            by_key.setdefault(key, default_audio)
+    return target_name, by_key
+
+
 def _build_narration_steps(
     step: StoryStep,
     cues: list[StoryNarrationCue],
@@ -608,6 +694,8 @@ def _build_narration_steps(
     inter_cue_pause_ms: int = 0,
     variants_by_trigger: dict[uuid.UUID, list[NarratorVariant]] | None = None,
     session_id: uuid.UUID | None = None,
+    name_audio_by_variant: dict[str, NarratorAudioFile] | None = None,
+    target_player_name: str | None = None,
 ) -> list[dict[str, Any]]:
     """Преобразует ORM-cues в формат ожидаемый ``resolve_steps``.
 
@@ -666,6 +754,40 @@ def _build_narration_steps(
         # text: override > variant > None
         effective_text = override_text if override_text else variant_text
 
+        # Фича 1: инъекция аудио имени (вариант произношения) между частями
+        # фразы. Если у cue задан name_variant_key и для имени жертвы есть
+        # аудио — собираем audio_segments [фраза_cue?, имя].
+        name_audio = (
+            (name_audio_by_variant or {}).get(cue.name_variant_key)
+            if cue.name_variant_key
+            else None
+        )
+        injected_segments: list[dict[str, Any]] | None = None
+        if name_audio is not None:
+            segments: list[dict[str, Any]] = []
+            if variant_audio_url:
+                segments.append(
+                    {
+                        "url": variant_audio_url,
+                        "duration_ms": variant_duration_ms,
+                    }
+                )
+            segments.append(
+                {
+                    "url": f"/audio/{name_audio.storage_path}",
+                    "duration_ms": name_audio.duration_ms,
+                }
+            )
+            injected_segments = segments
+            seg_total = sum(int(s["duration_ms"] or 0) for s in segments)
+            effective_duration = (
+                int(seg_total * multiplier) if multiplier != 1.0 else seg_total
+            ) or None
+            if target_player_name:
+                effective_text = " ".join(
+                    t for t in [effective_text, target_player_name] if t
+                ).strip() or None
+
         post_pause = int(getattr(cue, "pause_after_ms", 0) or 0)
         if idx < total:
             post_pause += inter_cue_pause_ms
@@ -688,7 +810,12 @@ def _build_narration_steps(
         }
         # Pre-fill audio (если есть вариант с файлом) — resolve_steps не
         # перезатрёт уже заполненные поля, если триггер не в манифесте.
-        if variant_audio_url:
+        if injected_segments is not None:
+            # Имя вставлено между фразами → отдаём audio_segments (фронт
+            # проигрывает их последовательно), audio_url=None.
+            item["audio_url"] = None
+            item["audio_segments"] = injected_segments
+        elif variant_audio_url:
             item["audio_url"] = variant_audio_url
             item["audio_file_name"] = variant_audio_filename
         items.append(item)
@@ -1139,6 +1266,7 @@ async def _handle_night_resolve(session_id: uuid.UUID, step: StoryStep) -> None:
 
         died_role: str | None = None
         died_count = 0
+        died_names: list[str] = []
         for tid in attack_targets:
             target = await db.scalar(
                 select(Player).options(selectinload(Player.role)).where(Player.id == tid)
@@ -1146,6 +1274,7 @@ async def _handle_night_resolve(session_id: uuid.UUID, step: StoryStep) -> None:
             if target and target.status == "alive":
                 target.status = "dead"
                 died_count += 1
+                died_names.append(target.name)
                 if died_count == 1 and target.role:
                     died_role = target.role.slug
                 elif died_count > 1:
@@ -1187,6 +1316,7 @@ async def _handle_night_resolve(session_id: uuid.UUID, step: StoryStep) -> None:
             phase_number=phase.phase_number,
             death_cause="night",
             died_role=died_role,
+            died_name=died_names[0] if len(died_names) == 1 else None,
         )
         winner = await check_win_condition(db, session_id)
         if winner is not None:
@@ -1230,6 +1360,7 @@ async def _handle_day_resolve(session_id: uuid.UUID, step: StoryStep) -> None:
 
         died_role: str | None = None
         vote_tie = False
+        eliminated_name: str | None = None
         if tally:
             max_count = max(tally.values())
             leaders = [tid for tid, c in tally.items() if c == max_count]
@@ -1243,6 +1374,7 @@ async def _handle_day_resolve(session_id: uuid.UUID, step: StoryStep) -> None:
                 if eliminated and eliminated.status == "alive":
                     eliminated.status = "dead"
                     died_role = eliminated.role.slug if eliminated.role else None
+                    eliminated_name = eliminated.name
                     db.add(
                         GameEvent(
                             id=uuid.uuid4(),
@@ -1283,6 +1415,7 @@ async def _handle_day_resolve(session_id: uuid.UUID, step: StoryStep) -> None:
             death_cause="vote",
             died_role=died_role,
             vote_tie=vote_tie,
+            died_name=eliminated_name,
         )
         winner = await check_win_condition(db, session_id)
         if winner is not None:
@@ -1419,10 +1552,13 @@ async def _refresh_step_vars(
     death_cause: str,
     died_role: str | None = None,
     vote_tie: bool = False,
+    died_name: str | None = None,
 ) -> None:
     """Обновляет step_vars после night_resolve / day_resolve.
 
     Считает alive_roles из БД (slug-и живых ролей) для условий role_alive/dead.
+    ``died_name`` — имя единственной жертвы (для инъекции варианта произношения
+    имени в последующих narration-cue с ``name_variant_key``).
     """
     state = await _load_state(db, session_id)
     if state is None:
@@ -1440,6 +1576,7 @@ async def _refresh_step_vars(
     vars["death_cause"] = death_cause
     vars["died_role"] = died_role
     vars["vote_tie"] = vote_tie
+    vars["died_player_name"] = died_name
     vars["alive_roles"] = sorted(set(alive_role_slugs))
     state.step_vars = vars
     await db.commit()

@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from api.deps import get_current_user, get_db
 from models.story import Story
@@ -33,6 +34,8 @@ class PublicStoryItem(BaseModel):
     version: int
     name: str
     description: str | None
+    cover_url: str | None = None
+    cover_crop: dict | None = None
 
 
 class PublicStoriesListResponse(BaseModel):
@@ -52,6 +55,7 @@ async def list_stories(
     stmt = (
         select(Story)
         .where(Story.is_active.is_(True), Story.is_obsolete.is_(False))
+        .options(selectinload(Story.cover_image))
         .order_by(Story.slug)
     )
     stories = (await db.scalars(stmt)).all()
@@ -63,6 +67,10 @@ async def list_stories(
                 version=s.version,
                 name=s.name,
                 description=s.description,
+                cover_url=(
+                    f"/images/{s.cover_image.storage_path}" if s.cover_image else None
+                ),
+                cover_crop=s.cover_crop,
             )
             for s in stories
         ]

@@ -24,9 +24,33 @@ export interface PlayerWithRole extends Player {
   role: { slug?: string; name: string; team: 'mafia' | 'city' | 'maniac' };
 }
 
+export interface CoverCrop {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface StoryVoteCard {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  cover_url: string | null;
+  cover_crop: CoverCrop | null;
+}
+
+export interface StoryVoteInfo {
+  stories: StoryVoteCard[];
+  counts: Record<string, number>;
+  voted: number;
+  alive_total: number;
+  my_vote: string | null;
+}
+
 export interface Phase {
   id: string;
-  type: 'role_reveal' | 'night' | 'day';
+  type: 'role_reveal' | 'night' | 'day' | 'story_vote';
   number: number;
   sub_phase: 'discussion' | 'voting' | null;
   started_at: string;         // ISO 8601

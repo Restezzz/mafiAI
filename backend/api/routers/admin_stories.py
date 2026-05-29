@@ -21,7 +21,7 @@ import uuid
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
 from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,29 +30,49 @@ from sqlalchemy.orm import selectinload
 from api.deps import get_db, require_admin
 from core.exceptions import GameError
 from core.logging import log_event
-from models.narrator import NarratorTrigger
+from models.image import ImageFile
+from models.narrator import NarratorAudioFile, NarratorNameAsset, NarratorTrigger
+from models.role import Role
 from models.story import (
     Story,
+    StoryNameVariant,
+    StoryNameVariantAsset,
     StoryNarrationCue,
+    StoryRoleOverride,
     StorySettings,
     StoryStep,
     StoryTransition,
 )
 from models.user import User
+from services.image_storage import delete_storage_file as delete_image_file
+from services.image_storage import save_uploaded_image
 from schemas.story import (
     Condition,
+    CoverCrop,
+    ImageRead,
+    ImagesListResponse,
     StoryCreate,
     StoryExport,
     StoryImportRequest,
     StoryLayoutUpdate,
     StoryListItem,
     StoryListResponse,
+    StoryNameVariantAssetRead,
+    StoryNameVariantAssetUpdate,
+    StoryNameVariantCreate,
+    StoryNameVariantRead,
+    StoryNameVariantUpdate,
     StoryNarrationCueCreate,
     StoryNarrationCueExport,
     StoryNarrationCueRead,
     StoryNarrationCueReorderRequest,
     StoryNarrationCueUpdate,
     StoryReadFull,
+    RoleCatalogItem,
+    RolesCatalogResponse,
+    StoryRoleOverrideCreate,
+    StoryRoleOverrideRead,
+    StoryRoleOverrideUpdate,
     StorySettingsExport,
     StorySettingsRead,
     StorySettingsUpdate,
@@ -101,6 +121,23 @@ def _validate_condition(value: dict[str, Any] | None) -> dict[str, Any] | None:
 # ============================================================================
 
 
+def _image_url(image: ImageFile | None) -> str | None:
+    """URL картинки через StaticFiles mount ``/images``."""
+    if image is None:
+        return None
+    return f"/images/{image.storage_path}"
+
+
+def _serialize_image(image: ImageFile) -> ImageRead:
+    return ImageRead(
+        id=str(image.id),
+        url=_image_url(image) or "",
+        width=image.width,
+        height=image.height,
+        size_bytes=image.size_bytes,
+    )
+
+
 def _serialize_cue(cue: StoryNarrationCue) -> StoryNarrationCueRead:
     return StoryNarrationCueRead(
         id=str(cue.id),
@@ -111,7 +148,57 @@ def _serialize_cue(cue: StoryNarrationCue) -> StoryNarrationCueRead:
         pause_after_ms=cue.pause_after_ms,
         override_text=cue.override_text,
         override_duration_ms=cue.override_duration_ms,
+        name_variant_key=cue.name_variant_key,
     )
+
+
+def _serialize_name_variant(
+    variant: StoryNameVariant, all_names: list[NarratorNameAsset]
+) -> StoryNameVariantRead:
+    """Сериализует вариант, включая ВСЕ имена каталога (заполненные и пустые слоты)."""
+    by_name: dict[uuid.UUID, StoryNameVariantAsset] = {
+        a.name_asset_id: a for a in variant.assets
+    }
+    assets: list[StoryNameVariantAssetRead] = []
+    for name in all_names:
+        asset = by_name.get(name.id)
+        audio = asset.audio_file if asset else None
+        assets.append(
+            StoryNameVariantAssetRead(
+                name_asset_id=str(name.id),
+                display_name=name.display_name,
+                audio_file_id=str(asset.audio_file_id)
+                if asset and asset.audio_file_id
+                else None,
+                audio_url=_audio_url(audio),
+                audio_filename=audio.filename if audio else None,
+            )
+        )
+    return StoryNameVariantRead(
+        id=str(variant.id),
+        key=variant.key,
+        label=variant.label,
+        sort_order=variant.sort_order,
+        assets=assets,
+    )
+
+
+def _serialize_role_override(o: StoryRoleOverride) -> StoryRoleOverrideRead:
+    return StoryRoleOverrideRead(
+        id=str(o.id),
+        role_slug=o.role_slug,
+        display_name=o.display_name,
+        card_front_image_id=str(o.card_front_image_id) if o.card_front_image_id else None,
+        card_front_url=_image_url(o.card_front_image),
+        card_back_image_id=str(o.card_back_image_id) if o.card_back_image_id else None,
+        card_back_url=_image_url(o.card_back_image),
+    )
+
+
+def _audio_url(audio_file: NarratorAudioFile | None) -> str | None:
+    if audio_file is None:
+        return None
+    return f"/audio/{audio_file.storage_path}"
 
 
 def _serialize_step(step: StoryStep) -> StoryStepRead:
@@ -147,7 +234,9 @@ def _serialize_settings(s: StorySettings | None) -> StorySettingsRead | None:
     )
 
 
-def _serialize_story_full(story: Story) -> StoryReadFull:
+def _serialize_story_full(
+    story: Story, all_names: list[NarratorNameAsset]
+) -> StoryReadFull:
     return StoryReadFull(
         id=str(story.id),
         slug=story.slug,
@@ -164,6 +253,13 @@ def _serialize_story_full(story: Story) -> StoryReadFull:
         settings=_serialize_settings(story.settings),
         steps=[_serialize_step(s) for s in story.steps],
         transitions=[_serialize_transition(t) for t in story.transitions],
+        cover_image_id=str(story.cover_image_id) if story.cover_image_id else None,
+        cover_url=_image_url(story.cover_image),
+        cover_crop=CoverCrop(**story.cover_crop) if story.cover_crop else None,
+        name_variants=[
+            _serialize_name_variant(v, all_names) for v in story.name_variants
+        ],
+        role_overrides=[_serialize_role_override(o) for o in story.role_overrides],
     )
 
 
@@ -172,8 +268,23 @@ def _serialize_story_full(story: Story) -> StoryReadFull:
 # ============================================================================
 
 
+async def _all_name_assets(db: AsyncSession) -> list[NarratorNameAsset]:
+    """Весь глобальный каталог имён (для строк ноды имён)."""
+    rows = await db.scalars(
+        select(NarratorNameAsset).order_by(NarratorNameAsset.display_name)
+    )
+    return list(rows.all())
+
+
+async def _story_full_response(db: AsyncSession, story: Story) -> StoryReadFull:
+    """Сериализует полный сюжет, подгружая каталог имён для ноды имён."""
+    names = await _all_name_assets(db)
+    return _serialize_story_full(story, names)
+
+
 async def _load_story_full(db: AsyncSession, story_id: UUID) -> Story:
-    """Eager-load полный граф (steps → cues → trigger; transitions; settings)."""
+    """Eager-load полный граф (steps → cues → trigger; transitions; settings;
+    cover; name_variants → assets → audio; role_overrides → images)."""
     stmt = (
         select(Story)
         .where(Story.id == story_id)
@@ -183,12 +294,29 @@ async def _load_story_full(db: AsyncSession, story_id: UUID) -> Story:
                 StoryNarrationCue.trigger
             ),
             selectinload(Story.transitions),
+            selectinload(Story.cover_image),
+            selectinload(Story.name_variants)
+            .selectinload(StoryNameVariant.assets)
+            .selectinload(StoryNameVariantAsset.audio_file),
+            selectinload(Story.role_overrides).selectinload(
+                StoryRoleOverride.card_front_image
+            ),
+            selectinload(Story.role_overrides).selectinload(
+                StoryRoleOverride.card_back_image
+            ),
         )
     )
     story = await db.scalar(stmt)
     if story is None:
         raise GameError(404, "story_not_found", "Сюжет не найден")
     return story
+
+
+async def _get_image_or_404(db: AsyncSession, image_id: UUID) -> ImageFile:
+    image = await db.get(ImageFile, image_id)
+    if image is None:
+        raise GameError(404, "image_not_found", "Картинка не найдена")
+    return image
 
 
 async def _get_step_or_404(
@@ -330,7 +458,7 @@ async def get_story(
 ) -> StoryReadFull:
     """Полный граф сюжета (steps + transitions + cues + settings)."""
     story = await _load_story_full(db, story_id)
-    return _serialize_story_full(story)
+    return await _story_full_response(db, story)
 
 
 @router.post("/stories", response_model=StoryReadFull, status_code=201)
@@ -346,6 +474,11 @@ async def create_story(
     """
     await _ensure_unique_slug(db, payload.slug)
 
+    cover_image_id: uuid.UUID | None = None
+    if payload.cover_image_id is not None:
+        await _get_image_or_404(db, payload.cover_image_id)
+        cover_image_id = payload.cover_image_id
+
     story = Story(
         id=uuid.uuid4(),
         slug=payload.slug,
@@ -354,6 +487,8 @@ async def create_story(
         description=payload.description,
         is_active=True,
         is_obsolete=False,
+        cover_image_id=cover_image_id,
+        cover_crop=payload.cover_crop.model_dump() if payload.cover_crop else None,
     )
     db.add(story)
 
@@ -374,7 +509,7 @@ async def create_story(
         "Story created", story_id=str(story.id), slug=story.slug, by_user=str(admin.id),
     )
     fresh = await _load_story_full(db, story.id)
-    return _serialize_story_full(fresh)
+    return await _story_full_response(db, fresh)
 
 
 @router.put("/stories/{story_id}", response_model=StoryReadFull)
@@ -391,6 +526,20 @@ async def update_story(
     """
     story = await _load_story_full(db, story_id)
     data = payload.model_dump(exclude_unset=True)
+
+    # Обложка обрабатывается отдельно (unset_cover / cover_crop — не колонки Story).
+    unset_cover = data.pop("unset_cover", False)
+    cover_image_id = data.pop("cover_image_id", None)
+    cover_crop = data.pop("cover_crop", None)
+    if unset_cover:
+        story.cover_image_id = None
+        story.cover_crop = None
+    else:
+        if cover_image_id is not None:
+            await _get_image_or_404(db, cover_image_id)
+            story.cover_image_id = cover_image_id
+        if cover_crop is not None:
+            story.cover_crop = cover_crop
 
     if "entry_step_id" in data and data["entry_step_id"] is not None:
         # Проверяем что entry_step принадлежит этому story.
@@ -416,7 +565,7 @@ async def update_story(
         by_user=str(admin.id),
     )
     fresh = await _load_story_full(db, story_id)
-    return _serialize_story_full(fresh)
+    return await _story_full_response(db, fresh)
 
 
 @router.delete("/stories/{story_id}", status_code=204)
@@ -471,7 +620,7 @@ async def duplicate_story(
         by_user=str(admin.id),
     )
     fresh = await _load_story_full(db, new_id)
-    return _serialize_story_full(fresh)
+    return await _story_full_response(db, fresh)
 
 
 async def _clone_story_internal(
@@ -906,6 +1055,7 @@ async def create_cue(
         pause_after_ms=payload.pause_after_ms,
         override_text=payload.override_text,
         override_duration_ms=payload.override_duration_ms,
+        name_variant_key=payload.name_variant_key,
     )
     db.add(cue)
     await db.commit()
@@ -946,6 +1096,10 @@ async def update_cue(
         cue.trigger_id = data["trigger_id"]
     data.pop("unset_trigger", None)
     data.pop("trigger_id", None)
+
+    if data.pop("unset_name_variant", False):
+        cue.name_variant_key = None
+        data.pop("name_variant_key", None)
 
     # sort_order: если меняется на занятый — 409.
     if "sort_order" in data and data["sort_order"] != cue.sort_order:
@@ -1296,4 +1450,396 @@ async def import_story(
         by_user=str(admin.id),
     )
     fresh = await _load_story_full(db, story.id)
-    return _serialize_story_full(fresh)
+    return await _story_full_response(db, fresh)
+
+
+# ============================================================================
+# Images (общее хранилище /images: карточки ролей, обложки сюжетов)
+# ============================================================================
+
+_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+@router.post("/images", response_model=ImageRead, status_code=201)
+async def upload_image(
+    file: UploadFile = File(..., description="png/jpg/gif/webp"),
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> ImageRead:
+    """Загружает картинку, сохраняет на диск, создаёт ImageFile.
+
+    Имя файла на диске — ``uploads/{uuid}.{ext}`` (исключает path-traversal).
+    """
+    if file.size is not None and file.size > _MAX_IMAGE_BYTES:
+        raise GameError(413, "file_too_large", "Картинка больше 10 МБ")
+
+    image_id = uuid.uuid4()
+    storage_path, size_bytes, width, height = await save_uploaded_image(
+        image_id=image_id, source=file.file
+    )
+    filename = (file.filename or "").strip() or f"{image_id}"
+
+    image = ImageFile(
+        id=image_id,
+        filename=f"{image_id}__{filename}"[:255],
+        storage_path=storage_path,
+        width=width,
+        height=height,
+        size_bytes=size_bytes,
+        uploaded_by_id=admin.id,
+    )
+    db.add(image)
+    await db.commit()
+    await db.refresh(image)
+    log_event(
+        logger, logging.INFO, "image.uploaded",
+        "Image uploaded", image_id=str(image.id), by_user=str(admin.id),
+    )
+    return _serialize_image(image)
+
+
+@router.get("/images", response_model=ImagesListResponse)
+async def list_images(
+    _admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> ImagesListResponse:
+    rows = await db.scalars(
+        select(ImageFile).order_by(ImageFile.uploaded_at.desc())
+    )
+    return ImagesListResponse(images=[_serialize_image(i) for i in rows.all()])
+
+
+@router.delete("/images/{image_id}", status_code=204)
+async def delete_image(
+    image_id: UUID,
+    _admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Удаляет ImageFile и файл с диска. Ссылки (cover/role cards) → NULL (SET NULL)."""
+    image = await db.get(ImageFile, image_id)
+    if image is None:
+        raise GameError(404, "image_not_found", "Картинка не найдена")
+    storage_path = image.storage_path
+    await db.delete(image)
+    await db.commit()
+    delete_image_file(storage_path)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ============================================================================
+# Name variants (фича 1): варианты произношения имён + их mp3
+# ============================================================================
+
+
+async def _load_variant_or_404(
+    db: AsyncSession, story_id: UUID, variant_id: UUID
+) -> StoryNameVariant:
+    stmt = (
+        select(StoryNameVariant)
+        .where(
+            StoryNameVariant.id == variant_id,
+            StoryNameVariant.story_id == story_id,
+        )
+        .options(
+            selectinload(StoryNameVariant.assets).selectinload(
+                StoryNameVariantAsset.audio_file
+            )
+        )
+    )
+    variant = await db.scalar(stmt)
+    if variant is None:
+        raise GameError(404, "name_variant_not_found", "Вариант имени не найден")
+    return variant
+
+
+@router.post(
+    "/stories/{story_id}/name-variants",
+    response_model=StoryNameVariantRead,
+    status_code=201,
+)
+async def create_name_variant(
+    story_id: UUID,
+    payload: StoryNameVariantCreate,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> StoryNameVariantRead:
+    # Проверяем что story существует.
+    story = await db.get(Story, story_id)
+    if story is None:
+        raise GameError(404, "story_not_found", "Сюжет не найден")
+
+    dup = await db.scalar(
+        select(func.count()).select_from(StoryNameVariant).where(
+            StoryNameVariant.story_id == story_id,
+            StoryNameVariant.key == payload.key,
+        )
+    )
+    if dup:
+        raise GameError(
+            409, "name_variant_key_conflict",
+            f"Вариант с ключом {payload.key!r} уже есть в этом сюжете",
+        )
+
+    variant = StoryNameVariant(
+        id=uuid.uuid4(),
+        story_id=story_id,
+        key=payload.key,
+        label=payload.label,
+        sort_order=payload.sort_order,
+    )
+    db.add(variant)
+    await db.commit()
+    log_event(
+        logger, logging.INFO, "story.name_variant_created",
+        "Name variant created", story_id=str(story_id), key=payload.key,
+        by_user=str(admin.id),
+    )
+    fresh = await _load_variant_or_404(db, story_id, variant.id)
+    names = await _all_name_assets(db)
+    return _serialize_name_variant(fresh, names)
+
+
+@router.put(
+    "/stories/{story_id}/name-variants/{variant_id}",
+    response_model=StoryNameVariantRead,
+)
+async def update_name_variant(
+    story_id: UUID,
+    variant_id: UUID,
+    payload: StoryNameVariantUpdate,
+    _admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> StoryNameVariantRead:
+    variant = await _load_variant_or_404(db, story_id, variant_id)
+    data = payload.model_dump(exclude_unset=True)
+    for key, value in data.items():
+        setattr(variant, key, value)
+    await db.commit()
+    fresh = await _load_variant_or_404(db, story_id, variant_id)
+    names = await _all_name_assets(db)
+    return _serialize_name_variant(fresh, names)
+
+
+@router.delete(
+    "/stories/{story_id}/name-variants/{variant_id}", status_code=204
+)
+async def delete_name_variant(
+    story_id: UUID,
+    variant_id: UUID,
+    _admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    variant = await _load_variant_or_404(db, story_id, variant_id)
+    await db.delete(variant)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.put(
+    "/stories/{story_id}/name-variants/{variant_id}/assets/{name_asset_id}",
+    response_model=StoryNameVariantAssetRead,
+)
+async def set_name_variant_asset(
+    story_id: UUID,
+    variant_id: UUID,
+    name_asset_id: UUID,
+    payload: StoryNameVariantAssetUpdate,
+    _admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> StoryNameVariantAssetRead:
+    """Привязать/сменить/сбросить mp3 для пары (variant, name)."""
+    variant = await _load_variant_or_404(db, story_id, variant_id)
+
+    name = await db.get(NarratorNameAsset, name_asset_id)
+    if name is None:
+        raise GameError(404, "name_not_found", "Имя не найдено")
+
+    new_audio_id: uuid.UUID | None = None
+    if not payload.unset_audio and payload.audio_file_id is not None:
+        audio = await db.get(NarratorAudioFile, payload.audio_file_id)
+        if audio is None:
+            raise GameError(404, "audio_not_found", "Аудио-файл не найден")
+        new_audio_id = payload.audio_file_id
+
+    asset = await db.scalar(
+        select(StoryNameVariantAsset).where(
+            StoryNameVariantAsset.variant_id == variant_id,
+            StoryNameVariantAsset.name_asset_id == name_asset_id,
+        )
+    )
+    if asset is None:
+        asset = StoryNameVariantAsset(
+            id=uuid.uuid4(),
+            variant_id=variant_id,
+            name_asset_id=name_asset_id,
+            audio_file_id=new_audio_id,
+        )
+        db.add(asset)
+    else:
+        asset.audio_file_id = new_audio_id
+    await db.commit()
+
+    fresh = await db.scalar(
+        select(StoryNameVariantAsset)
+        .where(StoryNameVariantAsset.id == asset.id)
+        .options(selectinload(StoryNameVariantAsset.audio_file))
+    )
+    audio = fresh.audio_file if fresh else None
+    return StoryNameVariantAssetRead(
+        name_asset_id=str(name_asset_id),
+        display_name=name.display_name,
+        audio_file_id=str(fresh.audio_file_id) if fresh and fresh.audio_file_id else None,
+        audio_url=_audio_url(audio),
+        audio_filename=audio.filename if audio else None,
+    )
+
+
+# ============================================================================
+# Role overrides (фича 2): переопределение визуала роли
+# ============================================================================
+
+
+async def _load_override_or_404(
+    db: AsyncSession, story_id: UUID, override_id: UUID
+) -> StoryRoleOverride:
+    stmt = (
+        select(StoryRoleOverride)
+        .where(
+            StoryRoleOverride.id == override_id,
+            StoryRoleOverride.story_id == story_id,
+        )
+        .options(
+            selectinload(StoryRoleOverride.card_front_image),
+            selectinload(StoryRoleOverride.card_back_image),
+        )
+    )
+    o = await db.scalar(stmt)
+    if o is None:
+        raise GameError(404, "role_override_not_found", "Переопределение роли не найдено")
+    return o
+
+
+async def _validate_role_slug(db: AsyncSession, role_slug: str) -> None:
+    exists = await db.scalar(select(Role).where(Role.slug == role_slug))
+    if exists is None:
+        raise GameError(404, "role_not_found", f"Роль {role_slug!r} не найдена")
+
+
+@router.get("/roles", response_model=RolesCatalogResponse)
+async def list_roles(
+    _admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> RolesCatalogResponse:
+    """Справочник всех ролей — для UI ноды ролей (фича 2)."""
+    rows = await db.scalars(select(Role).order_by(Role.name))
+    return RolesCatalogResponse(
+        roles=[
+            RoleCatalogItem(slug=r.slug, name=r.name, team=r.team)
+            for r in rows.all()
+        ]
+    )
+
+
+@router.post(
+    "/stories/{story_id}/role-overrides",
+    response_model=StoryRoleOverrideRead,
+    status_code=201,
+)
+async def create_role_override(
+    story_id: UUID,
+    payload: StoryRoleOverrideCreate,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> StoryRoleOverrideRead:
+    story = await db.get(Story, story_id)
+    if story is None:
+        raise GameError(404, "story_not_found", "Сюжет не найден")
+    await _validate_role_slug(db, payload.role_slug)
+
+    dup = await db.scalar(
+        select(func.count()).select_from(StoryRoleOverride).where(
+            StoryRoleOverride.story_id == story_id,
+            StoryRoleOverride.role_slug == payload.role_slug,
+        )
+    )
+    if dup:
+        raise GameError(
+            409, "role_override_conflict",
+            f"Переопределение роли {payload.role_slug!r} уже есть в этом сюжете",
+        )
+
+    for img_id in (payload.card_front_image_id, payload.card_back_image_id):
+        if img_id is not None:
+            await _get_image_or_404(db, img_id)
+
+    override = StoryRoleOverride(
+        id=uuid.uuid4(),
+        story_id=story_id,
+        role_slug=payload.role_slug,
+        display_name=payload.display_name,
+        card_front_image_id=payload.card_front_image_id,
+        card_back_image_id=payload.card_back_image_id,
+    )
+    db.add(override)
+    await db.commit()
+    log_event(
+        logger, logging.INFO, "story.role_override_created",
+        "Role override created", story_id=str(story_id), role=payload.role_slug,
+        by_user=str(admin.id),
+    )
+    fresh = await _load_override_or_404(db, story_id, override.id)
+    return _serialize_role_override(fresh)
+
+
+@router.put(
+    "/stories/{story_id}/role-overrides/{override_id}",
+    response_model=StoryRoleOverrideRead,
+)
+async def update_role_override(
+    story_id: UUID,
+    override_id: UUID,
+    payload: StoryRoleOverrideUpdate,
+    _admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> StoryRoleOverrideRead:
+    override = await _load_override_or_404(db, story_id, override_id)
+    data = payload.model_dump(exclude_unset=True)
+
+    if data.pop("unset_display_name", False):
+        override.display_name = None
+    elif "display_name" in data:
+        override.display_name = data["display_name"]
+    data.pop("display_name", None)
+
+    if data.pop("unset_card_front", False):
+        override.card_front_image_id = None
+    elif data.get("card_front_image_id") is not None:
+        await _get_image_or_404(db, data["card_front_image_id"])
+        override.card_front_image_id = data["card_front_image_id"]
+    data.pop("card_front_image_id", None)
+
+    if data.pop("unset_card_back", False):
+        override.card_back_image_id = None
+    elif data.get("card_back_image_id") is not None:
+        await _get_image_or_404(db, data["card_back_image_id"])
+        override.card_back_image_id = data["card_back_image_id"]
+    data.pop("card_back_image_id", None)
+
+    await db.commit()
+    fresh = await _load_override_or_404(db, story_id, override_id)
+    return _serialize_role_override(fresh)
+
+
+@router.delete(
+    "/stories/{story_id}/role-overrides/{override_id}", status_code=204
+)
+async def delete_role_override(
+    story_id: UUID,
+    override_id: UUID,
+    _admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    override = await _load_override_or_404(db, story_id, override_id)
+    await db.delete(override)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

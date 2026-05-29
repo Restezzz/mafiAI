@@ -26,13 +26,16 @@ from models.night_action import NightAction
 from models.player import Player
 from models.role import Role
 from models.session import Session
-from schemas.game import NightActionRequest, VoteRequest
+from models.story import StoryRoleOverride
+from schemas.game import NightActionRequest, StoryVoteRequest, VoteRequest
 from services.game_engine import (
     _player_target_dict,
     acknowledge_role,
     get_current_phase,
     resolve_votes,
     start_game,
+    start_story_vote,
+    submit_story_vote,
     transition_to_voting,
 )
 from services.audio_preload import clear_audio_preload
@@ -71,9 +74,33 @@ async def start(
     require_host(session, current_user.id)
     set_log_context(session_id=str(session_id), user_id=str(current_user.id))
 
+    # Фича 3: при новом сюжетном движке сначала голосование за сюжет
+    # (story_vote), сюжет выбирается голосованием, а не в настройках.
+    if bool((session.settings or {}).get("use_story_engine")):
+        result = await start_story_vote(db, session)
+        log_event(logger, logging.INFO, "game.started", "Story vote / game started", session_id=str(session_id), user_id=str(current_user.id))
+        return result
+
     await start_game(db, session)
     log_event(logger, logging.INFO, "game.started", "Game started", session_id=str(session_id), user_id=str(current_user.id))
     return {"status": "active", "phase": {"type": "role_reveal", "number": 0}}
+
+
+@router.post("/{session_id}/story-vote")
+async def story_vote(
+    session_id: uuid.UUID,
+    body: StoryVoteRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await get_session_or_404(db, session_id)
+    set_log_context(session_id=str(session_id), user_id=str(current_user.id))
+    if session_is_paused(session.settings):
+        raise GameError(403, "game_paused", "Игра на паузе")
+    if session.status != "active":
+        raise GameError(403, "wrong_phase", "Действие недоступно в текущей фазе")
+    player = await get_player_or_404(db, session_id, current_user.id)
+    return await submit_story_vote(db, session, player, body.story_id)
 
 
 @router.post("/{session_id}/acknowledge-role")
@@ -416,6 +443,23 @@ async def state(
     # роль игрока
     role = await db.get(Role, player.role_id) if player.role_id else None
 
+    # Фича 2: визуальное переопределение роли для сюжета (имя + 2 карточки).
+    # Логика роли (slug/team/abilities) не меняется — только display_name и
+    # картинки карточек на стадии role_reveal.
+    role_override: StoryRoleOverride | None = None
+    if role is not None and session.story_id is not None:
+        role_override = await db.scalar(
+            select(StoryRoleOverride)
+            .where(
+                StoryRoleOverride.story_id == session.story_id,
+                StoryRoleOverride.role_slug == role.slug,
+            )
+            .options(
+                selectinload(StoryRoleOverride.card_front_image),
+                selectinload(StoryRoleOverride.card_back_image),
+            )
+        )
+
     all_players = (
         await db.scalars(
             select(Player)
@@ -448,6 +492,13 @@ async def state(
     ):
         effective_timer_started_at = phase.started_at.isoformat()
         effective_timer_seconds = int((session.settings or {}).get("role_reveal_timer_seconds") or 15)
+    if (
+        phase is not None
+        and phase.phase_type == "story_vote"
+        and (effective_timer_started_at is None or effective_timer_seconds is None)
+    ):
+        effective_timer_started_at = phase.started_at.isoformat()
+        effective_timer_seconds = int((session.settings or {}).get("story_vote_timer_seconds") or 30)
     if paused:
         gp_snap = ((session.settings or {}).get("game_pause") or {}).get("snapshot") or {}
         snap_remaining = gp_snap.get("remaining_seconds")
@@ -476,7 +527,27 @@ async def state(
             "name": player.name,
             "status": player.status,
             "role": (
-                {"slug": role.slug, "name": role.name, "team": role.team, "abilities": role.abilities}
+                {
+                    "slug": role.slug,
+                    "name": role.name,
+                    "team": role.team,
+                    "abilities": role.abilities,
+                    "display_name": (
+                        role_override.display_name
+                        if role_override and role_override.display_name
+                        else role.name
+                    ),
+                    "card_front_url": (
+                        f"/images/{role_override.card_front_image.storage_path}"
+                        if role_override and role_override.card_front_image
+                        else None
+                    ),
+                    "card_back_url": (
+                        f"/images/{role_override.card_back_image.storage_path}"
+                        if role_override and role_override.card_back_image
+                        else None
+                    ),
+                }
                 if role
                 else {"slug": None, "name": None, "team": None, "abilities": {}}
             ),
@@ -524,6 +595,28 @@ async def state(
             "my_acknowledged": my_ack is not None,
             "players_acknowledged": int(acked or 0),
             "players_total": len(all_players),
+        }
+
+    if phase and phase.phase_type == "story_vote":
+        from services.game_engine import _story_vote_card, _tally_story_votes, _votable_stories
+
+        stories = await _votable_stories(db)
+        counts, voted = await _tally_story_votes(db, session_id, phase.id)
+        my_vote = await db.scalar(
+            select(GameEvent.payload["story_id"].astext).where(
+                GameEvent.session_id == session_id,
+                GameEvent.phase_id == phase.id,
+                GameEvent.event_type == "story_vote",
+                GameEvent.payload["player_id"].astext == str(player.id),
+            )
+        )
+        alive_total = sum(1 for p in all_players if p.status == "alive")
+        response["story_vote"] = {
+            "stories": [_story_vote_card(s) for s in stories],
+            "counts": counts,
+            "voted": voted,
+            "alive_total": alive_total,
+            "my_vote": my_vote,
         }
 
     # awaiting action during night turn

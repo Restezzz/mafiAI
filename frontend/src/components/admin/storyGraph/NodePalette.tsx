@@ -17,6 +17,8 @@ import {
   Pause,
   GitBranch,
   Flag,
+  Users,
+  IdCard,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
@@ -42,6 +44,8 @@ const KINDS: KindItem[] = [
   { kind: 'pause',         Icon: Pause,         label: 'Пауза',         color: '#7f8c8d', description: 'Ожидание / таймер' },
   { kind: 'branch',        Icon: GitBranch,     label: 'Развилка',      color: '#16a085', description: 'Условное ветвление' },
   { kind: 'end',           Icon: Flag,          label: 'Финал',         color: '#c0392b', description: 'Конец сюжета' },
+  { kind: 'names',         Icon: Users,         label: 'Имена',         color: '#8e44ad', description: 'Варианты произношения имён' },
+  { kind: 'roles',         Icon: IdCard,        label: 'Роли',          color: '#d35400', description: 'Визуал ролей (имя + карточки)' },
 ];
 
 export const DRAG_TYPE = 'application/reactflow-node-kind';

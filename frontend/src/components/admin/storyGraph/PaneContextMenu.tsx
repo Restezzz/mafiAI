@@ -12,6 +12,8 @@ import {
   Pause,
   GitBranch,
   Flag,
+  Users,
+  IdCard,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { StoryStepKind } from '../../../api/adminStoriesApi';
@@ -34,6 +36,8 @@ const KINDS: KindItem[] = [
   { kind: 'pause',         Icon: Pause,         label: 'Пауза',         color: '#7f8c8d' },
   { kind: 'branch',        Icon: GitBranch,     label: 'Развилка',      color: '#16a085' },
   { kind: 'end',           Icon: Flag,          label: 'Финал',         color: '#c0392b' },
+  { kind: 'names',         Icon: Users,         label: 'Имена',         color: '#8e44ad' },
+  { kind: 'roles',         Icon: IdCard,        label: 'Роли',          color: '#d35400' },
 ];
 
 export interface PaneContextMenuProps {
