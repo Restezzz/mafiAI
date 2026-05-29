@@ -107,6 +107,7 @@ function VariantRow({
   onTextSaved,
   onUploadMp3,
   onPickExisting,
+  onUnset,
   onDelete,
   onMoveUp,
   onMoveDown,
@@ -119,6 +120,7 @@ function VariantRow({
   onTextSaved: (id: string, text: string) => void;
   onUploadMp3: (id: string, file: File) => void;
   onPickExisting: (variantId: string, audioFileId: string) => void;
+  onUnset: (variantId: string) => void;
   onDelete: (id: string) => void;
   onMoveUp: (id: string) => void;
   onMoveDown: (id: string) => void;
@@ -180,58 +182,47 @@ function VariantRow({
         rows={2}
       />
       <div className="step-edit-panel__variant-audio">
-        {variant.audio_url ? (
-          <>
-            <MiniAudioPlayer src={variant.audio_url} />
-            <span className="step-edit-panel__variant-filename" title={variant.audio_filename || variant.audio_url.split('/').pop()}>
-              {variant.audio_filename || variant.audio_url.split('/').pop()}
-            </span>
-            <label className="step-edit-panel__icon-btn" title="Заменить аудио">
-              <Upload size={11} />
-              <input
-                type="file"
-                accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) onUploadMp3(variant.id, f);
-                }}
-                disabled={uploading}
-                style={{ display: 'none' }}
-              />
-            </label>
-          </>
-        ) : (
-          <div className="step-edit-panel__audio-pick">
-            <label className="step-edit-panel__upload-label" title="Загрузить аудио">
-              <Upload size={12} />
-              <span>Загрузить</span>
-              <input
-                type="file"
-                accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) onUploadMp3(variant.id, f);
-                }}
-                disabled={uploading}
-                style={{ display: 'none' }}
-              />
-            </label>
-            {audioFiles.length > 0 && (
-              <select
-                className="admin-select step-edit-panel__audio-select"
-                value=""
-                onChange={(e) => {
-                  if (e.target.value) onPickExisting(variant.id, e.target.value);
-                }}
-                disabled={uploading}
-              >
-                <option value="">Выбрать из загруженных…</option>
-                {audioFiles.map((af) => (
-                  <option key={af.id} value={af.id}>{af.filename}</option>
-                ))}
-              </select>
-            )}
-          </div>
+        {variant.audio_url && <MiniAudioPlayer src={variant.audio_url} />}
+        <label className="step-edit-panel__upload-label" title="Загрузить аудио">
+          <Upload size={12} />
+          <span>{variant.audio_file_id ? 'Заменить' : 'Загрузить'}</span>
+          <input
+            type="file"
+            accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) onUploadMp3(variant.id, f);
+            }}
+            disabled={uploading}
+            style={{ display: 'none' }}
+          />
+        </label>
+        {audioFiles.length > 0 && (
+          <select
+            className="admin-select step-edit-panel__audio-select"
+            value={variant.audio_file_id ?? ''}
+            onChange={(e) =>
+              e.target.value
+                ? onPickExisting(variant.id, e.target.value)
+                : onUnset(variant.id)
+            }
+            disabled={uploading}
+          >
+            <option value="">— из загруженных —</option>
+            {audioFiles.map((af) => (
+              <option key={af.id} value={af.id}>{af.filename}</option>
+            ))}
+          </select>
+        )}
+        {variant.audio_file_id && (
+          <button
+            type="button"
+            className="step-edit-panel__cue-delete"
+            onClick={() => onUnset(variant.id)}
+            title="Очистить аудио"
+          >
+            <X size={11} />
+          </button>
         )}
       </div>
     </div>
@@ -452,6 +443,17 @@ function CueEditor({
     } catch {}
   };
 
+  const handleVariantUnset = async (variantId: string) => {
+    try {
+      await adminNarratorApi.updateVariant(variantId, { unset_audio: true });
+      if (autoTrigger) {
+        const updated = await adminNarratorApi.getTrigger(autoTrigger.id);
+        triggerMap.set(autoTrigger.id, updated.data);
+        onCueUpdated({ ...cue });
+      }
+    } catch {}
+  };
+
   const handleVariantDelete = async (variantId: string) => {
     try {
       await adminNarratorApi.deleteVariant(variantId);
@@ -528,6 +530,7 @@ function CueEditor({
                   onTextSaved={handleVariantTextSaved}
                   onUploadMp3={handleVariantUploadMp3}
                   onPickExisting={handleVariantPickExisting}
+                  onUnset={handleVariantUnset}
                   onDelete={handleVariantDelete}
                   onMoveUp={(id) => handleVariantMove(id, 'up')}
                   onMoveDown={(id) => handleVariantMove(id, 'down')}
