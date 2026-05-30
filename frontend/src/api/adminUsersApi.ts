@@ -29,4 +29,8 @@ export const adminUsersApi = {
   /** Quick-form: выдать админа по email без поиска. LOWER(email) на бекенде. */
   promoteByEmail: (email: string) =>
     httpClient.post<AdminUser>(`${BASE}/promote-by-email`, { email }),
+
+  /** Физически удаляет юзера и его зависимости (сессии-хоста, подписки, players). */
+  remove: (userId: string) =>
+    httpClient.delete<{ deleted: boolean; id: string }>(`${BASE}/${userId}`),
 };

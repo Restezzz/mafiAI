@@ -27,10 +27,12 @@ from api.deps import get_db, require_admin
 from core.exceptions import GameError
 from core.logging import log_event
 from core.utils import utc_now
+from models.dev_test_lobby_link import DevTestLobbyLink
 from models.game_phase import GamePhase
 from models.player import Player
 from models.session import Session as SessionModel
 from models.user import User
+from services.user_deletion import delete_users_with_dependencies
 
 
 logger = logging.getLogger(__name__)
@@ -287,11 +289,36 @@ async def delete_session(
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Физическое удаление сессии. Cascade удалит players, phases, events."""
+    """Физическое удаление сессии. Cascade удалит players, phases, events.
+
+    Дополнительно сносим синтетических игроков dev-test лобби (их User-записи),
+    которые иначе остаются «висеть» в списке пользователей админки как реальные
+    аккаунты. Хост (bootstrap_key='host') — реальный админ, его не трогаем.
+    """
     sess = await db.get(SessionModel, session_id)
     if sess is None:
         raise GameError(404, "session_not_found", "Сессия не найдена")
+
+    # Собираем id синтетических игроков ДО удаления сессии — dev_test_lobby_links
+    # уйдут каскадом вместе с ней. email LIKE pattern + не-админ как доп. защита,
+    # чтобы случайно не удалить реального юзера.
+    synthetic_user_ids = list(
+        (
+            await db.scalars(
+                select(DevTestLobbyLink.user_id)
+                .join(User, User.id == DevTestLobbyLink.user_id)
+                .where(
+                    DevTestLobbyLink.session_id == session_id,
+                    DevTestLobbyLink.bootstrap_key != "host",
+                    User.email.like(SYNTHETIC_EMAIL_PATTERN),
+                    User.is_admin.is_(False),
+                )
+            )
+        ).all()
+    )
+
     await db.delete(sess)
+    deleted_users = await delete_users_with_dependencies(db, synthetic_user_ids)
     await db.commit()
     log_event(
         logger,
@@ -300,8 +327,13 @@ async def delete_session(
         "Admin deleted session",
         session_id=str(session_id),
         admin_id=str(admin.id),
+        synthetic_users_deleted=deleted_users,
     )
-    return {"deleted": True, "id": str(session_id)}
+    return {
+        "deleted": True,
+        "id": str(session_id),
+        "synthetic_users_deleted": deleted_users,
+    }
 
 
 @router.post("/cleanup/abandoned-sessions", response_model=CleanupResult)
