@@ -196,9 +196,8 @@ export default function StoryVoteScreen() {
     <div className="story-vote">
       <GameScreenHeader
         title="Голосование за сюжет"
-        showPause={false}
+        showPause
         showCharacterName={false}
-        pauseSlot={<span className="story-vote__header-spacer" />}
         timer={<Timer seconds={timeLeft} dangerThreshold={5} />}
       />
 

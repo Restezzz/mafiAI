@@ -17,7 +17,7 @@ import { gameApi } from '../api/gameApi';
 import { sessionApi } from '../api/sessionApi';
 import { wsClient } from '../api/wsClient';
 import {
-  AUDIO_PRELOAD_MANIFEST_VERSION,
+  configureNarrationAudioPlan,
   getAudioPreloadProgress,
   preloadNarrationAudio,
   subscribeAudioPreload,
@@ -156,11 +156,32 @@ export default function StorySelectionPage() {
         }, { sessionId: session.id });
       });
 
-    preloadNarrationAudio()
+    // Сначала спрашиваем у бэка набор озвучки для ЭТОЙ сессии (story-scoped для
+    // story-сюжетов, глобальный манифест для legacy), настраиваем предзагрузчик
+    // и только потом грузим — иначе фронт тянул бы весь каталог (~88 файлов).
+    // Версию для markAudioPreloadReady берём из результата preload (= версия
+    // активного плана), чтобы readiness-карта совпала с тем, что считает бэк.
+    sessionApi.getAudioPreloadManifest(session.id)
+      .then((response) => {
+        if (cancelled) return;
+        configureNarrationAudioPlan({
+          urls: response.data.audio_urls,
+          version: response.data.version,
+          viaApi: response.data.via_api,
+        });
+      })
+      .catch((err) => {
+        // Не фатально: остаёмся на дефолтном (глобальном) плане предзагрузки.
+        logger.warn('api.nonfatal_failure', 'Failed to load audio preload manifest', {
+          reason: err instanceof Error ? err.message : String(err),
+          sessionId: session.id,
+        }, { sessionId: session.id });
+      })
+      .then(() => preloadNarrationAudio())
       .then(async (result) => {
-        if (cancelled || result.failed > 0) return;
+        if (cancelled || !result || result.failed > 0) return;
         const response = await sessionApi.markAudioPreloadReady(session.id, {
-          manifest_version: AUDIO_PRELOAD_MANIFEST_VERSION,
+          manifest_version: result.manifestVersion,
         });
         if (!cancelled) {
           setAudioPreloadStatus(response.data);

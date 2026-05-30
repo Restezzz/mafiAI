@@ -13,8 +13,7 @@ from models.session import Session
 from models.user import User
 from schemas.dev import DevLobbyInfo, DevLobbyPlayerLink
 from schemas.session import PlayerInList, SessionDetailResponse
-from services.audio_manifest import get_manifest
-from services.audio_preload import AUDIO_PRELOAD_SETTINGS_KEY
+from services.audio_preload import AUDIO_PRELOAD_SETTINGS_KEY, session_audio_plan
 from services.auth_service import hash_password
 from core.utils import utc_now  # noqa: F401  (used by mark_synthetic_players_audio_ready)
 
@@ -216,7 +215,10 @@ async def mark_synthetic_players_audio_ready(
     if not synthetic_player_ids:
         return
 
-    manifest_version = get_manifest().version
+    # Версия должна совпадать с той, что считает session_audio_plan (story-scoped
+    # для story-сессий), иначе синт-игроки не попадут в readiness и автостарт
+    # зависнет на ready_count < players_total.
+    manifest_version = (await session_audio_plan(db, session))["version"]
     current_settings = dict(session.settings or {})
     raw_preload = current_settings.get(AUDIO_PRELOAD_SETTINGS_KEY)
     if isinstance(raw_preload, dict) and raw_preload.get("manifest_version") == manifest_version:

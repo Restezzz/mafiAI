@@ -10,6 +10,7 @@ import type {
   PlayerInList,
   AudioPreloadReadyRequest,
   AudioPreloadStatusResponse,
+  AudioPreloadManifestResponse,
 } from '../types/api';
 
 export const sessionApi = {
@@ -39,6 +40,9 @@ export const sessionApi = {
 
   getAudioPreloadStatus: (sessionId: string) =>
     httpClient.get<AudioPreloadStatusResponse>(`/sessions/${sessionId}/audio-preload`),
+
+  getAudioPreloadManifest: (sessionId: string) =>
+    httpClient.get<AudioPreloadManifestResponse>(`/sessions/${sessionId}/audio-preload/manifest`),
 
   markAudioPreloadReady: (sessionId: string, data: AudioPreloadReadyRequest) =>
     httpClient.post<AudioPreloadStatusResponse>(`/sessions/${sessionId}/audio-preload-ready`, data),

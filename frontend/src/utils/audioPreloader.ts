@@ -43,15 +43,60 @@ const failedUrls = new Set<string>();
 const blobUrls = new Map<string, string>();
 const listeners = new Set<(progress: AudioPreloadProgress) => void>();
 
+export const AUDIO_PRELOAD_MANIFEST_VERSION = MANIFEST.version ?? 'unknown';
+
+// Активный план предзагрузки. По умолчанию — глобальный манифест ведущего
+// (legacy). Для story-сессий фронт вызывает configureNarrationAudioPlan() с
+// набором URL'ов конкретного сюжета (с бэка), чтобы не тянуть весь каталог.
+// activeViaApi=true означает, что файлы лежат в backend storage и их надо
+// фетчить через API_BASE_URL (см. fetchAudio); ключ blob'а — всегда «голый»
+// /audio/... URL, как его ждёт resolvePreloadedAudioUrl при воспроизведении.
+let activeUrls: string[] = AUDIO_URLS;
+let activeVersion: string = AUDIO_PRELOAD_MANIFEST_VERSION;
+let activeViaApi = false;
+
 let preloadPromise: Promise<AudioPreloadResult> | null = null;
 let currentProgress: AudioPreloadProgress = {
-  total: AUDIO_URLS.length,
+  total: activeUrls.length,
   loaded: 0,
   failed: 0,
-  done: AUDIO_URLS.length === 0,
+  done: activeUrls.length === 0,
 };
 
-export const AUDIO_PRELOAD_MANIFEST_VERSION = MANIFEST.version ?? 'unknown';
+/**
+ * Переключает набор озвучки для предзагрузки (story-scoped).
+ *
+ * Если план не изменился (та же версия и тот же состав URL'ов) — no-op, чтобы
+ * повторные ре-рендеры не сбрасывали уже загруженные blob'ы. При смене плана
+ * освобождаем старые blob'ы и начинаем предзагрузку с нуля.
+ */
+export function configureNarrationAudioPlan(plan: {
+  urls: string[];
+  version: string;
+  viaApi?: boolean;
+}): void {
+  const sameVersion = plan.version === activeVersion;
+  const sameUrls =
+    plan.urls.length === activeUrls.length &&
+    plan.urls.every((url, i) => url === activeUrls[i]);
+  if (sameVersion && sameUrls && plan.viaApi === activeViaApi) {
+    return;
+  }
+  releaseBlobs();
+  loadedUrls.clear();
+  failedUrls.clear();
+  preloadPromise = null;
+  activeUrls = [...plan.urls];
+  activeVersion = plan.version;
+  activeViaApi = plan.viaApi ?? false;
+  currentProgress = {
+    total: activeUrls.length,
+    loaded: 0,
+    failed: 0,
+    done: activeUrls.length === 0,
+  };
+  emitProgress();
+}
 
 export function collectAudioUrls(manifest: AudioManifestShape): string[] {
   const urls = new Set<string>();
@@ -71,7 +116,7 @@ export function collectAudioUrls(manifest: AudioManifestShape): string[] {
 }
 
 export function getNarrationAudioUrls(): string[] {
-  return AUDIO_URLS;
+  return activeUrls;
 }
 
 export function getAudioPreloadProgress(): AudioPreloadProgress {
@@ -110,7 +155,7 @@ export function subscribeAudioPreload(listener: (progress: AudioPreloadProgress)
  * памяти браузера до полной перезагрузки страницы. Между сессиями одного
  * пользователя кэш чистить не надо: озвучка переиспользуется.
  */
-export function clearAudioPreloadCache(): void {
+function releaseBlobs(): void {
   if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
     blobUrls.forEach((blobUrl) => {
       try {
@@ -121,14 +166,18 @@ export function clearAudioPreloadCache(): void {
     });
   }
   blobUrls.clear();
+}
+
+export function clearAudioPreloadCache(): void {
+  releaseBlobs();
   loadedUrls.clear();
   failedUrls.clear();
   preloadPromise = null;
   currentProgress = {
-    total: AUDIO_URLS.length,
+    total: activeUrls.length,
     loaded: 0,
     failed: 0,
-    done: AUDIO_URLS.length === 0,
+    done: activeUrls.length === 0,
   };
   emitProgress();
 }
@@ -138,11 +187,12 @@ export function preloadNarrationAudio(): Promise<AudioPreloadResult> {
     return preloadPromise;
   }
 
+  const urls = activeUrls;
   preloadPromise = (async () => {
-    if (AUDIO_URLS.length === 0 || typeof fetch !== 'function') {
+    if (urls.length === 0 || typeof fetch !== 'function') {
       currentProgress = {
-        total: AUDIO_URLS.length,
-        loaded: AUDIO_URLS.length,
+        total: urls.length,
+        loaded: urls.length,
         failed: 0,
         done: true,
       };
@@ -150,7 +200,7 @@ export function preloadNarrationAudio(): Promise<AudioPreloadResult> {
       return result();
     }
 
-    await runWithConcurrency(AUDIO_URLS, 4, async (url) => {
+    await runWithConcurrency(urls, 4, async (url) => {
       if (loadedUrls.has(url)) {
         updateProgress();
         return;
@@ -170,7 +220,7 @@ export function preloadNarrationAudio(): Promise<AudioPreloadResult> {
     });
 
     currentProgress = {
-      total: AUDIO_URLS.length,
+      total: urls.length,
       loaded: loadedUrls.size,
       failed: failedUrls.size,
       done: true,
@@ -183,10 +233,14 @@ export function preloadNarrationAudio(): Promise<AudioPreloadResult> {
 }
 
 async function fetchAudio(url: string): Promise<Blob> {
+  // Story-озвучка (activeViaApi) лежит в backend storage — фетчим через
+  // API_BASE_URL. blob кэшируем по «голому» url (как ждёт воспроизведение).
+  const fetchUrl =
+    activeViaApi && url.startsWith('/audio/') ? `${API_BASE_URL}${url}` : url;
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const response = await fetch(url, { cache: 'force-cache' });
+      const response = await fetch(fetchUrl, { cache: 'force-cache' });
       if (!response.ok) {
         throw new Error(`Audio preload failed: ${response.status}`);
       }
@@ -230,10 +284,10 @@ async function runWithConcurrency<T>(
 
 function updateProgress(): void {
   currentProgress = {
-    total: AUDIO_URLS.length,
+    total: activeUrls.length,
     loaded: loadedUrls.size,
     failed: failedUrls.size,
-    done: loadedUrls.size + failedUrls.size >= AUDIO_URLS.length,
+    done: loadedUrls.size + failedUrls.size >= activeUrls.length,
   };
   emitProgress();
 }
@@ -245,6 +299,6 @@ function emitProgress(): void {
 function result(): AudioPreloadResult {
   return {
     ...currentProgress,
-    manifestVersion: AUDIO_PRELOAD_MANIFEST_VERSION,
+    manifestVersion: activeVersion,
   };
 }

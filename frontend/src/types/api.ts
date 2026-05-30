@@ -149,6 +149,15 @@ export interface AudioPreloadReadyRequest {
   manifest_version: string;
 }
 
+export interface AudioPreloadManifestResponse {
+  /** "story" — озвучка сюжета(ов) сессии; "manifest" — глобальный манифест (legacy). */
+  source: 'story' | 'manifest';
+  version: string;
+  audio_urls: string[];
+  /** true — файлы лежат в backend storage и грузятся через API_BASE_URL. */
+  via_api: boolean;
+}
+
 export interface ActivateDevPlayerRequest {
   code: string;
   player_slug: string;
