@@ -23,6 +23,7 @@ from api.deps import get_db, require_admin
 from core.exceptions import GameError
 from core.logging import log_event
 from models.user import User
+from services.user_deletion import delete_users_with_dependencies
 
 
 logger = logging.getLogger(__name__)
@@ -146,6 +147,38 @@ async def demote_user(
             revoked_by_email=admin.email,
         )
     return _serialize_user(user)
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: uuid.UUID,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Физически удаляет пользователя и его зависимости (сессии-хоста,
+    подписки, player-записи). Запрет self-delete, чтобы админ не снёс
+    собственный аккаунт по ошибке.
+    """
+    if user_id == admin.id:
+        raise GameError(400, "self_delete_forbidden", "Нельзя удалить собственный аккаунт")
+    user = await db.get(User, user_id)
+    if user is None:
+        raise GameError(404, "user_not_found", "Пользователь не найден")
+
+    email = user.email
+    await delete_users_with_dependencies(db, [user_id])
+    await db.commit()
+    log_event(
+        logger,
+        logging.INFO,
+        "admin.user_deleted",
+        "Admin deleted user",
+        user_id=str(user_id),
+        email=email,
+        deleted_by_id=str(admin.id),
+        deleted_by_email=admin.email,
+    )
+    return {"deleted": True, "id": str(user_id)}
 
 
 @router.post("/users/promote-by-email", response_model=AdminUserItem)

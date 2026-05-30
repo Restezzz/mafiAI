@@ -13,6 +13,7 @@ export default function AdminUsersPage() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [total, setTotal] = useState(0);
   const [query, setQuery] = useState('');
+  const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -23,6 +24,12 @@ export default function AdminUsersPage() {
   const [promoteError, setPromoteError] = useState('');
   const [promoteSuccess, setPromoteSuccess] = useState('');
 
+  // Новый поиск всегда сбрасывает на первую страницу — иначе offset мог бы
+  // указывать за пределы отфильтрованного набора.
+  useEffect(() => {
+    setPage(0);
+  }, [query]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -30,7 +37,7 @@ export default function AdminUsersPage() {
     // 250ms debounce — не дёргаем бек на каждое нажатие клавиши.
     const t = setTimeout(() => {
       adminUsersApi
-        .list({ q: query.trim() || undefined, limit: PAGE_SIZE })
+        .list({ q: query.trim() || undefined, limit: PAGE_SIZE, offset: page * PAGE_SIZE })
         .then((res) => {
           if (cancelled) return;
           setUsers(res.data.users);
@@ -51,7 +58,7 @@ export default function AdminUsersPage() {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [query]);
+  }, [query, page]);
 
   const upsertUser = (updated: AdminUser) => {
     setUsers((arr) => {
@@ -74,6 +81,29 @@ export default function AdminUsersPage() {
         userId: user.id,
       });
       setError(getApiErrorMessage(err) ?? 'Операция не удалась');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleDelete = async (user: AdminUser) => {
+    const ok = window.confirm(
+      `Удалить пользователя ${user.email}? Будут удалены его сессии (как хоста), ` +
+        'подписки и участия в играх. Действие необратимо.',
+    );
+    if (!ok) return;
+    setBusyId(user.id);
+    setError('');
+    try {
+      await adminUsersApi.remove(user.id);
+      setUsers((arr) => arr.filter((u) => u.id !== user.id));
+      setTotal((t) => Math.max(0, t - 1));
+    } catch (err) {
+      logger.warn('admin.users.delete_failed', 'Failed to delete user', {
+        error: parseApiError(err),
+        userId: user.id,
+      });
+      setError(getApiErrorMessage(err) ?? 'Не удалось удалить пользователя');
     } finally {
       setBusyId(null);
     }
@@ -198,24 +228,56 @@ export default function AdminUsersPage() {
                         <span className="admin-pill">user</span>
                       )}
                     </div>
-                    <button
-                      type="button"
-                      className={`admin-btn${u.is_admin ? '' : ' admin-btn--primary'}`}
-                      disabled={isBusy || cannotDemoteSelf}
-                      onClick={() => handleToggle(u)}
-                      title={cannotDemoteSelf ? 'Нельзя снять админа с себя' : undefined}
-                    >
-                      {isBusy ? '…' : u.is_admin ? 'Снять админа' : 'Сделать админом'}
-                    </button>
+                    <div className="admin-row" style={{ gap: 8, flexWrap: 'nowrap' }}>
+                      <button
+                        type="button"
+                        className={`admin-btn${u.is_admin ? '' : ' admin-btn--primary'}`}
+                        disabled={isBusy || cannotDemoteSelf}
+                        onClick={() => handleToggle(u)}
+                        title={cannotDemoteSelf ? 'Нельзя снять админа с себя' : undefined}
+                      >
+                        {isBusy ? '…' : u.is_admin ? 'Снять админа' : 'Сделать админом'}
+                      </button>
+                      <button
+                        type="button"
+                        className="admin-btn admin-btn--danger"
+                        disabled={isBusy || isMe}
+                        onClick={() => handleDelete(u)}
+                        title={isMe ? 'Нельзя удалить себя' : 'Удалить пользователя'}
+                      >
+                        {isBusy ? '…' : 'Удалить'}
+                      </button>
+                    </div>
                   </div>
                 );
               })}
             </div>
           )}
 
-          {total > users.length && (
-            <div style={{ marginTop: 12, color: '#8c8f95', fontSize: '0.85rem', textAlign: 'center' }}>
-              Уточните поиск, чтобы увидеть остальных.
+          {!loading && !error && total > PAGE_SIZE && (
+            <div
+              className="admin-row"
+              style={{ marginTop: 12, alignItems: 'center', justifyContent: 'center', gap: 12 }}
+            >
+              <button
+                type="button"
+                className="admin-btn"
+                disabled={page === 0}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+              >
+                ← Назад
+              </button>
+              <span style={{ color: '#8c8f95', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>
+                стр. {page + 1} из {Math.max(1, Math.ceil(total / PAGE_SIZE))}
+              </span>
+              <button
+                type="button"
+                className="admin-btn"
+                disabled={(page + 1) * PAGE_SIZE >= total}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Вперёд →
+              </button>
             </div>
           )}
         </div>
