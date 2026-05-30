@@ -5,6 +5,7 @@ import { useSessionStore } from '../stores/sessionStore';
 import { getApiErrorMessage } from '../utils/getApiErrorMessage';
 import { wsClient } from '../api/wsClient';
 import { getRoleInfo, CARD_BACK_IMAGE } from '../utils/roles';
+import { API_BASE_URL } from '../utils/constants';
 import NarratorScreen from '../components/game/NarratorScreen';
 import NightActionScreen from '../components/game/NightActionScreen';
 import NightWaitingScreen from '../components/game/NightWaitingScreen';
@@ -259,7 +260,13 @@ export default function GamePage() {
   }
 
   const roleInfo = getRoleInfo(myRole);
-  const roleImage = roleInfo?.image ?? CARD_BACK_IMAGE;
+  // Фича 2: пер-сюжетный визуал роли. Кастомные карточки/имя из StoryRoleOverride
+  // имеют приоритет над статическим каталогом (utils/roles). card_*_url —
+  // относительные пути с бэка, поэтому префиксуем API_BASE_URL.
+  const overrideUrl = (url?: string | null) => (url ? `${API_BASE_URL}${url}` : null);
+  const roleImage = overrideUrl(myRole.card_front_url) ?? roleInfo?.image ?? CARD_BACK_IMAGE;
+  const cardBackImage = overrideUrl(myRole.card_back_url) ?? CARD_BACK_IMAGE;
+  const roleDisplayName = myRole.display_name || roleInfo?.displayName || myRole.name;
   const roleDesc = roleInfo?.description ?? 'Роль без описания способностей.';
   const nightAction = myRole.abilities?.night_action;
   const devPlayerLinks = session?.dev_lobby?.player_links ?? [];
@@ -298,7 +305,7 @@ export default function GamePage() {
               <div className={`role-card ${flipped ? 'role-card--flipped' : ''}`} onClick={handleFlip}>
                 <div className="role-card__inner">
                   <div className="role-card__back">
-                    <img src={CARD_BACK_IMAGE} alt="Card back" className="role-card__back-img" />
+                    <img src={cardBackImage} alt="Card back" className="role-card__back-img" />
                   </div>
                   <div className="role-card__front">
                     <img src={roleImage} alt="Role" className="role-card__front-img" />
@@ -311,7 +318,7 @@ export default function GamePage() {
 
               <div className={`role-abilities ${showAbilities ? 'role-abilities--visible' : ''}`}>
                 <div className="role-abilities__card">
-                  <h3 className="role-abilities__title">Способности</h3>
+                  <h3 className="role-abilities__title">{roleDisplayName}</h3>
                   <p className="role-abilities__text">{roleDesc}</p>
                   {nightAction && (
                     <div className="role-abilities__action">

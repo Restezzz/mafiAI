@@ -322,13 +322,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       stack: stack.split('\n').slice(1, 6).join(' | '),
     }, { sessionId });
 
-    // Optimistic update: мгновенно меняем UI чтобы пользователь не ждал
-    // round-trip POST + WS broadcast (60-200ms на проде). Без этого хост
-    // жмёт кнопку и видит "ничего не происходит" пока WS `game_paused`
-    // не дойдёт. WS-обработчики (game_paused/game_resumed) перезатрут наше
-    // значение тем же — race-safe. На случай ошибки API ниже откатываем.
+    // Optimistic update ТОЛЬКО для постановки на паузу: мгновенно замораживаем
+    // UI, чтобы хост не ждал round-trip POST + WS broadcast (60-200ms на проде).
+    //
+    // На СНЯТИИ с паузы оптимистично НЕ снимаем: иначе useCountdown тут же
+    // пересчитает таймер от старой timer_started_at (как будто пауза «шла») и
+    // покажет «отмотанное» время (баг: 00:30 → 00:05). Ждём авторитетный WS
+    // `game_resumed`, который принесёт пересчитанные timer_seconds/
+    // timer_started_at и сам снимет паузу (см. wsClient game_resumed handler).
     const previousPaused = state.timerPaused;
-    set({ timerPaused: paused });
+    if (paused) {
+      set({ timerPaused: true });
+    }
 
     try {
       if (paused) {

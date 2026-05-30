@@ -334,6 +334,8 @@ async def _run_step(session_id: uuid.UUID, step: StoryStep) -> None:
         "voting": _handle_voting,
         "night_resolve": _handle_night_resolve,
         "day_resolve": _handle_day_resolve,
+        "roles": _handle_config_passthrough,
+        "names": _handle_config_passthrough,
     }
     handler = handlers.get(step.kind)
     if handler is None:
@@ -908,6 +910,23 @@ async def _handle_branch(session_id: uuid.UUID, step: StoryStep) -> None:
         "Branch step encountered (no UI)",
         session_id=str(session_id),
         step_slug=step.slug,
+    )
+
+
+async def _handle_config_passthrough(session_id: uuid.UUID, step: StoryStep) -> None:
+    """``roles`` / ``names`` — конфигурационные ноды графа.
+
+    Они хранят пер-сюжетные оверрайды (визуал ролей в StoryRoleOverride,
+    варианты имён в story_names) на уровне сюжета, а не в runtime. В исполнении
+    графа это no-op: просто проходим дальше, чтобы движок не вис на неизвестном
+    kind. Advance к следующему шагу делает _run_loop.
+    """
+    log_event(
+        logger, logging.DEBUG, "story_engine.config_passthrough",
+        "Config node encountered (no runtime action)",
+        session_id=str(session_id),
+        step_slug=step.slug,
+        step_kind=step.kind,
     )
 
 

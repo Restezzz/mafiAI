@@ -30,7 +30,7 @@ from models.day_vote import DayVote
 from models.player import Player
 from models.role import Role
 from models.session import Session
-from models.story import StoryName
+from models.story import StoryName, StoryRoleOverride
 from services.narration_script import (
     all_acknowledged_steps,
     day_discussion_steps,
@@ -500,6 +500,57 @@ async def start_game(db: AsyncSession, session: Session) -> None:
     await _run_role_reveal(db, session)
 
 
+async def _role_overrides_by_slug(
+    db: AsyncSession, story_id: uuid.UUID | None
+) -> dict[str, "StoryRoleOverride"]:
+    """Карта role_slug -> StoryRoleOverride для сюжета (с подгруженными картинками).
+
+    Пустая карта, если у сессии нет story_id. Используется чтобы добавить
+    пер-сюжетный визуал роли (имя + 2 карточки) в WS role_assigned.
+    """
+    if story_id is None:
+        return {}
+    rows = (
+        await db.scalars(
+            select(StoryRoleOverride)
+            .where(StoryRoleOverride.story_id == story_id)
+            .options(
+                selectinload(StoryRoleOverride.card_front_image),
+                selectinload(StoryRoleOverride.card_back_image),
+            )
+        )
+    ).all()
+    return {o.role_slug: o for o in rows}
+
+
+def _role_payload_with_override(
+    role: Role, overrides_by_slug: dict[str, "StoryRoleOverride"]
+) -> dict:
+    """Сериализует роль для WS role_assigned, добавляя пер-сюжетный визуал.
+
+    display_name/card_front_url/card_back_url повторяют формат из
+    GET /state (api/routers/game.py), чтобы фронт обрабатывал их одинаково.
+    """
+    ov = overrides_by_slug.get(role.slug)
+    return {
+        "slug": role.slug,
+        "name": role.name,
+        "team": role.team,
+        "abilities": role.abilities,
+        "display_name": ov.display_name if ov and ov.display_name else role.name,
+        "card_front_url": (
+            f"/images/{ov.card_front_image.storage_path}"
+            if ov and ov.card_front_image
+            else None
+        ),
+        "card_back_url": (
+            f"/images/{ov.card_back_image.storage_path}"
+            if ov and ov.card_back_image
+            else None
+        ),
+    }
+
+
 async def _run_role_reveal(db: AsyncSession, session: Session) -> None:
     """Раздаёт роли, создаёт role_reveal фазу и рассылает WS.
 
@@ -604,6 +655,10 @@ async def _run_role_reveal(db: AsyncSession, session: Session) -> None:
 
     # Персонально роль (эфемерное)
     role_by_id = {v.id: v for v in role_by_slug.values()}
+    # Фича 2: пер-сюжетный визуал роли (display_name + 2 карточки). Без него
+    # фронт на role_reveal показывал дефолтную карточку/название из статического
+    # каталога. Грузим оверрайды одним запросом и кладём в role_assigned.
+    overrides_by_slug = await _role_overrides_by_slug(db, session.story_id)
     await asyncio.gather(*(
         ws_manager.send_to_user(
             session.id,
@@ -611,12 +666,9 @@ async def _run_role_reveal(db: AsyncSession, session: Session) -> None:
             {
                 "type": "role_assigned",
                 "payload": {
-                    "role": {
-                        "slug": role_by_id[p.role_id].slug,
-                        "name": role_by_id[p.role_id].name,
-                        "team": role_by_id[p.role_id].team,
-                        "abilities": role_by_id[p.role_id].abilities,
-                    }
+                    "role": _role_payload_with_override(
+                        role_by_id[p.role_id], overrides_by_slug
+                    )
                 },
             },
         )
@@ -756,7 +808,7 @@ async def start_story_vote(db: AsyncSession, session: Session) -> dict:
             "payload": {
                 "phase": {"type": "story_vote", "number": 0},
                 "timer_seconds": timer_seconds,
-                "started_at": phase.started_at.isoformat(),
+                "timer_started_at": phase.started_at.isoformat(),
                 "stories": [_story_vote_card(s) for s in stories],
             },
         },
@@ -970,7 +1022,7 @@ async def start_name_pick(db: AsyncSession, session: Session) -> None:
             "payload": {
                 "phase": {"type": "name_pick", "number": 0},
                 "timer_seconds": timer_seconds,
-                "started_at": phase.started_at.isoformat(),
+                "timer_started_at": phase.started_at.isoformat(),
                 "names": options,
             },
         },

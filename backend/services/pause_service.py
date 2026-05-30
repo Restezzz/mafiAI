@@ -129,43 +129,78 @@ async def resume_game(session_id: uuid.UUID) -> None:
             restored_blocked.add(u)
     rt.blocked_tonight = restored_blocked
 
-    # Story Engine: если сессия использует новый движок — перезапускаем
-    # его _run_loop через start_story (он идемпотентен и подхватит
-    # current_step_id из SessionStoryState). Skip legacy ptype-branch'ей,
-    # иначе получим параллельный запуск transition_to_night, который
-    # сыграет rules-narration и создаст лишнюю фазу.
     async with async_session_factory() as db2:
         sess2 = await db2.get(Session, session_id)
         use_story = bool(
             sess2 and sess2.story_id and (sess2.settings or {}).get("use_story_engine")
         )
-    if use_story:
+
+    # Пред-движковые фазы (story_vote / name_pick / role_reveal) выполняются в
+    # game_engine ДАЖЕ для story-сессий, поэтому обрабатываем их до ветки
+    # use_story — иначе start_story запустил бы граф с самого начала, минуя
+    # текущую фазу. Каждая ветка перезапускает свой таймер и шлёт game_resumed
+    # со свежим timer_started_at, чтобы фронт пересчитал отсчёт корректно.
+    if ptype == "story_vote":
+        from services.game_engine import resolve_story_vote
+
+        async def _on_story_vote_timeout():
+            await resolve_story_vote(session_id)
+
+        rt.day_sub_phase = None
+        rt.night_turn = None
+        rt.timer_name = "story_vote"
+        rt.timer_seconds = rem
+        rt.timer_started_at = utc_now()
+        await timer_service.start_timer(session_id, "story_vote", rem, _on_story_vote_timeout)
         await ws_manager.send_to_session(
             session_id,
             {
                 "type": "game_resumed",
                 "payload": {
-                    "phase": {"type": ptype, "number": int(snap.get("phase_number") or 0)},
+                    "phase": {"type": "story_vote", "number": int(snap.get("phase_number") or 0)},
                     "timer_seconds": rem,
-                    "timer_started_at": utc_now().isoformat(),
+                    "timer_started_at": rt.timer_started_at.isoformat(),
                     "announcement": {"trigger": "game_resumed"},
                 },
             },
         )
-        from services.story_runtime import start_story
-        await start_story(session_id)
-        log_event(
-            logger, logging.INFO, "game.resumed",
-            "Story Engine resumed from pause",
-            session_id=str(session_id),
+        log_event(logger, logging.INFO, "game.resumed", "Story vote resumed from pause", session_id=str(session_id))
+        return
+
+    if ptype == "name_pick":
+        from services.game_engine import resolve_name_pick
+
+        async def _on_name_pick_timeout():
+            await resolve_name_pick(session_id)
+
+        rt.day_sub_phase = None
+        rt.night_turn = None
+        rt.timer_name = "name_pick"
+        rt.timer_seconds = rem
+        rt.timer_started_at = utc_now()
+        await timer_service.start_timer(session_id, "name_pick", rem, _on_name_pick_timeout)
+        await ws_manager.send_to_session(
+            session_id,
+            {
+                "type": "game_resumed",
+                "payload": {
+                    "phase": {"type": "name_pick", "number": int(snap.get("phase_number") or 0)},
+                    "timer_seconds": rem,
+                    "timer_started_at": rt.timer_started_at.isoformat(),
+                    "announcement": {"trigger": "game_resumed"},
+                },
+            },
         )
+        log_event(logger, logging.INFO, "game.resumed", "Name pick resumed from pause", session_id=str(session_id))
         return
 
     if ptype == "role_reveal":
-        from services.game_engine import transition_to_night
+        # По истечении таймера role_reveal идём в первую ночь / story-движок
+        # (_enter_first_night_or_story сам выбирает legacy vs story).
+        from services.game_engine import _enter_first_night_or_story
 
         async def _on_timeout():
-            await transition_to_night(session_id, 1)
+            await _enter_first_night_or_story(session_id)
 
         rt.day_sub_phase = None
         rt.night_turn = None
@@ -186,6 +221,33 @@ async def resume_game(session_id: uuid.UUID) -> None:
             },
         )
         log_event(logger, logging.INFO, "game.resumed", "Role reveal resumed from pause", session_id=str(session_id))
+        return
+
+    # Story Engine: для in-game фаз (night/day) перезапускаем _run_loop через
+    # start_story (он идемпотентен и подхватит current_step_id из
+    # SessionStoryState). Skip legacy ptype-branch'ей, иначе получим
+    # параллельный запуск transition_to_night, который сыграет rules-narration
+    # и создаст лишнюю фазу.
+    if use_story:
+        await ws_manager.send_to_session(
+            session_id,
+            {
+                "type": "game_resumed",
+                "payload": {
+                    "phase": {"type": ptype, "number": int(snap.get("phase_number") or 0)},
+                    "timer_seconds": rem,
+                    "timer_started_at": utc_now().isoformat(),
+                    "announcement": {"trigger": "game_resumed"},
+                },
+            },
+        )
+        from services.story_runtime import start_story
+        await start_story(session_id)
+        log_event(
+            logger, logging.INFO, "game.resumed",
+            "Story Engine resumed from pause",
+            session_id=str(session_id),
+        )
         return
 
     if ptype == "day":

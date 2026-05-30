@@ -81,9 +81,8 @@ export default function NamePickScreen() {
     <div className="name-pick">
       <GameScreenHeader
         title="Выбор имени"
-        showPause={false}
+        showPause
         showCharacterName={false}
-        pauseSlot={<span className="name-pick__header-spacer" />}
         timer={<Timer seconds={timeLeft} dangerThreshold={5} />}
       />
 

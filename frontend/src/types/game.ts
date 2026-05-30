@@ -5,6 +5,14 @@ export interface Role {
   abilities?: {
     night_action: 'kill' | 'check' | 'heal' | 'don_check' | 'lover_visit' | 'maniac_kill' | null;
   };
+  /**
+   * Фича 2: пер-сюжетный визуал роли (StoryRoleOverride). Бэк отдаёт их и в
+   * GET /state, и в WS role_assigned. Если оверрайда нет — display_name равен
+   * name, а card_*_url == null (фронт падает на статический каталог).
+   */
+  display_name?: string | null;
+  card_front_url?: string | null;   // относительный путь "/images/..."
+  card_back_url?: string | null;    // относительный путь "/images/..."
 }
 
 export interface Player {
