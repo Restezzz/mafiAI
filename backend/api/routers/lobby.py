@@ -18,7 +18,12 @@ from models.game_event import GameEvent
 from models.player import Player
 from models.session import Session
 from schemas.session import AudioPreloadReadyRequest, PlayerInList, RenamePlayerRequest, UpdateSettingsRequest
-from services.audio_preload import clear_audio_preload, get_audio_preload_status, mark_audio_preload_ready
+from services.audio_preload import (
+    clear_audio_preload,
+    get_audio_preload_status,
+    mark_audio_preload_ready,
+    session_audio_plan,
+)
 from services.dev_test_lobby_service import mark_synthetic_players_audio_ready
 from services.game_engine import apply_host_kick
 from services.lobby_service import handle_player_left
@@ -114,6 +119,19 @@ async def audio_preload_status(
     session = await get_session_or_404(db, session_id)
     await get_player_or_404(db, session_id, current_user.id)
     return await get_audio_preload_status(db, session)
+
+
+@router.get("/{session_id}/audio-preload/manifest")
+async def audio_preload_manifest(
+    session_id: uuid.UUID,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Набор URL'ов озвучки для предзагрузки: story-scoped для story-сессий,
+    глобальный манифест для legacy. Фронт грузит только эти файлы."""
+    session = await get_session_or_404(db, session_id)
+    await get_player_or_404(db, session_id, current_user.id)
+    return await session_audio_plan(db, session)
 
 
 @router.post("/{session_id}/audio-preload-ready")

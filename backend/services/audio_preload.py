@@ -16,12 +16,14 @@ from core.exceptions import GameError
 from core.utils import utc_now
 from models.player import Player
 from models.session import Session
+from models.story import Story
 from services.audio_manifest import AudioManifest, get_manifest
+from services.story_audio import collect_story_audio_urls, story_audio_version
 
 AUDIO_PRELOAD_SETTINGS_KEY = "audio_preload"
 
 
-def _audio_urls_count(manifest: AudioManifest) -> int:
+def _manifest_urls(manifest: AudioManifest) -> list[str]:
     urls: set[str] = set()
     for name in manifest.names:
         if name.intro_audio:
@@ -35,7 +37,52 @@ def _audio_urls_count(manifest: AudioManifest) -> int:
                 urls.add(pair.opener.audio_url)
             if pair.closer.audio_url:
                 urls.add(pair.closer.audio_url)
-    return len(urls)
+    return sorted(urls)
+
+
+def _audio_urls_count(manifest: AudioManifest) -> int:
+    return len(_manifest_urls(manifest))
+
+
+async def session_audio_plan(db: AsyncSession, session: Session) -> dict:
+    """Набор озвучки, который должен предзагрузить клиент для этой сессии.
+
+    - story-движок (``use_story_engine`` и есть голосуемые сюжеты): только
+      аудио сюжетов, которые сессия МОЖЕТ сыграть — объединение всех голосуемых
+      (а не весь глобальный каталог ведущего). Берём именно голосуемый набор, а
+      не уже выбранный ``story_id``: набор стабилен от лобби до раздачи ролей,
+      поэтому версия-хеш (а значит и readiness-карта игроков) не «протухает»
+      после голосования за сюжет. ``via_api=True`` — файлы в backend storage.
+    - иначе (legacy / нет сюжетов): глобальный манифест ведущего (как раньше),
+      ``via_api`` False — seed-файлы отдаёт origin фронта.
+    """
+    settings = dict(session.settings or {})
+    if settings.get("use_story_engine"):
+        story_ids = list(
+            (
+                await db.scalars(
+                    select(Story.id).where(
+                        Story.is_active.is_(True), Story.is_obsolete.is_(False)
+                    )
+                )
+            ).all()
+        )
+        if story_ids:
+            urls = await collect_story_audio_urls(db, story_ids)
+            return {
+                "source": "story",
+                "version": story_audio_version(urls),
+                "audio_urls": urls,
+                "via_api": True,
+            }
+
+    manifest = get_manifest()
+    return {
+        "source": "manifest",
+        "version": manifest.version,
+        "audio_urls": _manifest_urls(manifest),
+        "via_api": False,
+    }
 
 
 def _ready_map(settings: dict[str, Any], manifest_version: str) -> dict[str, str]:
@@ -50,19 +97,18 @@ def _ready_map(settings: dict[str, Any], manifest_version: str) -> dict[str, str
     return {str(player_id): str(marked_at) for player_id, marked_at in ready.items()}
 
 
-def build_audio_preload_status(
+def _status_for(
     settings: dict[str, Any] | None,
     players: list[Player],
     *,
-    manifest: AudioManifest | None = None,
+    version: str,
+    audio_count: int,
 ) -> dict:
-    manifest = manifest or get_manifest()
-    audio_count = _audio_urls_count(manifest)
     player_ids = {str(player.id) for player in players}
-    ready = _ready_map(dict(settings or {}), manifest.version)
+    ready = _ready_map(dict(settings or {}), version)
     ready_player_ids = sorted(player_id for player_id in ready if player_id in player_ids)
     return {
-        "manifest_version": manifest.version,
+        "manifest_version": version,
         "required": audio_count > 0,
         "audio_count": audio_count,
         "ready_count": len(ready_player_ids),
@@ -71,9 +117,30 @@ def build_audio_preload_status(
     }
 
 
+def build_audio_preload_status(
+    settings: dict[str, Any] | None,
+    players: list[Player],
+    *,
+    manifest: AudioManifest | None = None,
+) -> dict:
+    manifest = manifest or get_manifest()
+    return _status_for(
+        settings,
+        players,
+        version=manifest.version,
+        audio_count=_audio_urls_count(manifest),
+    )
+
+
 async def get_audio_preload_status(db: AsyncSession, session: Session) -> dict:
     players = (await db.scalars(select(Player).where(Player.session_id == session.id))).all()
-    return build_audio_preload_status(session.settings, list(players))
+    plan = await session_audio_plan(db, session)
+    return _status_for(
+        session.settings,
+        list(players),
+        version=plan["version"],
+        audio_count=len(plan["audio_urls"]),
+    )
 
 
 async def mark_audio_preload_ready(
@@ -83,21 +150,21 @@ async def mark_audio_preload_ready(
     player_id: uuid.UUID,
     manifest_version: str,
 ) -> tuple[Session, dict]:
-    manifest = get_manifest()
-    if manifest_version != manifest.version:
-        raise GameError(409, "audio_manifest_mismatch", "Версия озвучки устарела, обновите страницу")
-
     session = await db.scalar(select(Session).where(Session.id == session_id).with_for_update())
     if session is None:
         raise GameError(404, "session_not_found", "Сессия не найдена")
     if session.status != "waiting":
         raise GameError(409, "wrong_phase", "Озвучку можно подготовить только до старта игры")
 
+    plan = await session_audio_plan(db, session)
+    if manifest_version != plan["version"]:
+        raise GameError(409, "audio_manifest_mismatch", "Версия озвучки устарела, обновите страницу")
+
     settings = dict(session.settings or {})
-    ready = _ready_map(settings, manifest.version)
+    ready = _ready_map(settings, plan["version"])
     ready[str(player_id)] = utc_now().isoformat()
     settings[AUDIO_PRELOAD_SETTINGS_KEY] = {
-        "manifest_version": manifest.version,
+        "manifest_version": plan["version"],
         "ready": ready,
     }
     session.settings = settings
