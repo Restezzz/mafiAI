@@ -8,6 +8,20 @@ import { logger } from '../../services/logger';
 import { parseApiError } from '../../utils/parseApiError';
 import { getApiErrorMessage } from '../../utils/getApiErrorMessage';
 
+// Бэкенд принимает slug только по маске [a-z0-9_], 1..80 символов (иначе 400
+// validation_error). Нормализуем ввод на лету: латиница в нижний регистр,
+// пробелы/дефисы/прочее → '_', схлопываем повторы, режем по длине. Так юзер
+// физически не сможет отправить кириллицу/заглавные/дефисы и поймать 400.
+const SLUG_RE = /^[a-z0-9_]{1,80}$/;
+function slugify(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+/, '')
+    .slice(0, 80);
+}
+
 
 /**
  * Список сюжетов. Каждый сюжет — карточка с краткой инфо и кнопками:
@@ -77,6 +91,13 @@ export default function AdminStoriesListPage() {
     const name = createName.trim();
     if (!slug || !name) {
       setCreateError('Slug и название обязательны');
+      return;
+    }
+    if (!SLUG_RE.test(slug)) {
+      setCreateError(
+        'Slug может содержать только латиницу в нижнем регистре, цифры и _ ' +
+          '(без пробелов, дефисов, заглавных и кириллицы), 1–80 символов.',
+      );
       return;
     }
     setCreateBusy(true);
@@ -254,16 +275,20 @@ export default function AdminStoriesListPage() {
             <form onSubmit={handleCreate} className="admin-stack">
               <div>
                 <label htmlFor="story-slug" style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
-                  Slug (a-z0-9_)
+                  Slug (только a-z, 0-9 и _)
                 </label>
                 <input
                   id="story-slug"
                   className="admin-input"
                   placeholder="my_custom_mafia"
                   value={createSlug}
-                  onChange={(e) => setCreateSlug(e.target.value)}
+                  onChange={(e) => setCreateSlug(slugify(e.target.value))}
                   disabled={createBusy}
                 />
+                <div className="admin-row__hint" style={{ marginTop: 4, fontSize: 12 }}>
+                  Латиница в нижнем регистре, цифры и _ . Пробелы и дефисы
+                  заменяются на _ автоматически.
+                </div>
               </div>
               <div>
                 <label htmlFor="story-name" style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
