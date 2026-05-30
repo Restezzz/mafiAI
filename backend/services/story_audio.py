@@ -22,8 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from models.narrator import (
-    NarratorCompositeSegment,
-    NarratorCompositeTemplate,
     NarratorTrigger,
     NarratorVariant,
 )
@@ -40,56 +38,82 @@ def _audio_url(storage_path: str) -> str:
     return f"/audio/{storage_path}"
 
 
+def variant_index_for_cue(
+    session_id: uuid.UUID | None, cue_id: uuid.UUID, variant_count: int
+) -> int:
+    """Детерминированно выбирает индекс варианта озвучки для (сессия, cue).
+
+    Используется И при воспроизведении (``story_runtime``), И при предзагрузке
+    (здесь), чтобы preload тянул ровно тот файл, который реально прозвучит —
+    а не все варианты триггера. Стабильный sha1 вместо встроенного ``hash()``
+    (тот солится PYTHONHASHSEED и «плавает» между процессами).
+    """
+    if variant_count <= 0:
+        return 0
+    if session_id is None:
+        return 0
+    digest = hashlib.sha1(f"{session_id}:{cue_id}".encode("utf-8")).hexdigest()
+    return int(digest, 16) % variant_count
+
+
 async def collect_story_audio_urls(
-    db: AsyncSession, story_ids: list[uuid.UUID]
+    db: AsyncSession,
+    story_ids: list[uuid.UUID],
+    *,
+    session_id: uuid.UUID | None = None,
 ) -> list[str]:
     """Уникальные ``/audio/...`` URL'ы, которые может проиграть сюжет(ы).
 
     Возвращается отсортированный список (детерминированно — чтобы версия-хеш
     была стабильной между клиентами и перезапусками).
+
+    ``session_id`` задан → собираем минимальный set: для каждой narration-cue
+    берём ТОЛЬКО тот вариант триггера, который реально прозвучит в этой сессии
+    (тот же детерминированный выбор, что и в ``story_runtime``). Раньше тянулись
+    ВСЕ варианты каждого триггера + composite-сегменты (которые story-движок
+    вообще не проигрывает) — отсюда ~50 файлов вместо реальных 5–10.
+    Без ``session_id`` — поведение прежнее (все варианты), на случай legacy-путей.
     """
     if not story_ids:
         return []
 
     urls: set[str] = set()
 
-    # 1. Триггеры, на которые ссылаются narration-cues сюжета: их варианты и
-    #    composite-сегменты с привязанным audio_file.
-    trigger_ids = set(
-        (
-            await db.scalars(
-                select(StoryNarrationCue.trigger_id)
-                .join(StoryStep, StoryNarrationCue.step_id == StoryStep.id)
-                .where(
-                    StoryStep.story_id.in_(story_ids),
-                    StoryNarrationCue.trigger_id.is_not(None),
-                )
+    # 1. Варианты озвучки триггеров, на которые ссылаются narration-cues сюжета.
+    #    Грузим cue→trigger→variants и для каждой cue добавляем выбранный вариант
+    #    (а при session_id=None — все, для обратной совместимости).
+    cues = (
+        await db.scalars(
+            select(StoryNarrationCue)
+            .join(StoryStep, StoryNarrationCue.step_id == StoryStep.id)
+            .where(
+                StoryStep.story_id.in_(story_ids),
+                StoryNarrationCue.trigger_id.is_not(None),
             )
-        ).all()
-    )
-    if trigger_ids:
-        triggers = (
-            await db.scalars(
-                select(NarratorTrigger)
-                .where(NarratorTrigger.id.in_(trigger_ids))
-                .options(
-                    selectinload(NarratorTrigger.variants).selectinload(
-                        NarratorVariant.audio_file
-                    ),
-                    selectinload(NarratorTrigger.composite_templates)
-                    .selectinload(NarratorCompositeTemplate.segments)
-                    .selectinload(NarratorCompositeSegment.audio_file),
-                )
+            .options(
+                selectinload(StoryNarrationCue.trigger)
+                .selectinload(NarratorTrigger.variants)
+                .selectinload(NarratorVariant.audio_file)
             )
-        ).all()
-        for trigger in triggers:
-            for variant in trigger.variants:
-                if variant.audio_file is not None:
-                    urls.add(_audio_url(variant.audio_file.storage_path))
-            for template in trigger.composite_templates:
-                for segment in template.segments:
-                    if segment.audio_file is not None:
-                        urls.add(_audio_url(segment.audio_file.storage_path))
+        )
+    ).all()
+    for cue in cues:
+        trigger = cue.trigger
+        if trigger is None:
+            continue
+        # Стабильный порядок вариантов (по id) — чтобы индекс совпал с
+        # воспроизведением независимо от порядка, в котором их вернул драйвер.
+        variants = sorted(trigger.variants, key=lambda v: str(v.id))
+        if not variants:
+            continue
+        if session_id is not None:
+            idx = variant_index_for_cue(session_id, cue.id, len(variants))
+            chosen = [variants[idx]]
+        else:
+            chosen = variants
+        for variant in chosen:
+            if variant.audio_file is not None:
+                urls.add(_audio_url(variant.audio_file.storage_path))
 
     # 2. Базовое произношение имён набора сюжета.
     names = (

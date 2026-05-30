@@ -17,6 +17,7 @@ import { gameApi } from '../api/gameApi';
 import { sessionApi } from '../api/sessionApi';
 import { wsClient } from '../api/wsClient';
 import {
+  clearAudioPreloadCache,
   configureNarrationAudioPlan,
   getAudioPreloadProgress,
   preloadNarrationAudio,
@@ -50,6 +51,9 @@ export default function StorySelectionPage() {
   const [audioPreloadProgress, setAudioPreloadProgress] = useState<AudioPreloadProgress>(() =>
     getAudioPreloadProgress()
   );
+  // Ручной повтор предзагрузки (кнопка в состоянии ошибки): сбрасывает кэш и
+  // перезапускает effect ниже — без перезагрузки всей страницы.
+  const [audioRetryNonce, setAudioRetryNonce] = useState(0);
 
   const session = useSessionStore((s) => s.session);
   const players = useSessionStore((s) => s.players);
@@ -198,7 +202,12 @@ export default function StorySelectionPage() {
       cancelled = true;
       unsubscribe();
     };
-  }, [players.length, session, setAudioPreloadStatus]);
+  }, [players.length, session, setAudioPreloadStatus, audioRetryNonce]);
+
+  const handleRetryAudio = React.useCallback(() => {
+    clearAudioPreloadCache();
+    setAudioRetryNonce((n) => n + 1);
+  }, []);
 
   const audioPlayersTotal = audioPreloadStatus?.players_total ?? players.length;
   const audioReadyCount = audioPreloadStatus?.ready_count ?? 0;
@@ -387,8 +396,18 @@ export default function StorySelectionPage() {
                   {audioUiState === 'loading' && 'Файлы кэшируются заранее, чтобы во время игры не было пауз.'}
                   {audioUiState === 'waiting' && 'У вас всё загружено. Остальные ещё качают озвучку.'}
                   {audioUiState === 'ready' && 'Можно начинать партию.'}
-                  {audioUiState === 'error' && 'Перезагрузите страницу. Если ошибка повторяется — сообщите хосту.'}
+                  {audioUiState === 'error' && 'Часть файлов не загрузилась. Нажмите «Повторить» — если не поможет, перезагрузите страницу.'}
                 </div>
+                {audioUiState === 'error' && (
+                  <button
+                    type="button"
+                    className="admin-btn admin-btn--primary"
+                    style={{ marginTop: 8 }}
+                    onClick={handleRetryAudio}
+                  >
+                    Повторить загрузку
+                  </button>
+                )}
                 {audioUiState === 'loading' && (
                   <>
                     <div className="story-audio__track">

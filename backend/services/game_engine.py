@@ -551,13 +551,37 @@ def _role_payload_with_override(
     }
 
 
-async def _run_role_reveal(db: AsyncSession, session: Session) -> None:
+async def _run_role_reveal(
+    db: AsyncSession, session: Session, *, enforce_audio_ready: bool = True
+) -> None:
     """Раздаёт роли, создаёт role_reveal фазу и рассылает WS.
 
     Выделено из ``start_game`` чтобы переиспользовать после голосования за
     сюжет (фаза ``story_vote`` → выбор story_id → role_reveal).
+
+    ``enforce_audio_ready`` — жёсткая проверка готовности озвучки (поднимает 409,
+    если не все игроки докачали). Включена для ручного старта хостом, где 409
+    видит сам хост. На автоматическом пути (таймер ``name_pick`` истёк →
+    ``resolve_name_pick``) проверку делаем best-effort: предзагрузка — лишь
+    оптимизация (воспроизведение умеет тянуть файл из backend storage на лету),
+    поэтому НЕ блокируем переход. Иначе исключение в фоновой задаче таймера
+    оставляло сессию без активной фазы (name_pick уже закрыт) — отсюда «ошибка
+    сервера» при обновлении страницы и зависание на выдаче ролей.
     """
-    await ensure_audio_preload_ready(db, session)
+    if enforce_audio_ready:
+        await ensure_audio_preload_ready(db, session)
+    else:
+        try:
+            await ensure_audio_preload_ready(db, session)
+        except GameError as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                "role_reveal.audio_not_ready",
+                "Proceeding to role_reveal despite audio not fully preloaded",
+                session_id=str(session.id),
+                detail=getattr(exc, "message", str(exc)),
+            )
 
     players = list(
         (await db.scalars(select(Player).where(Player.session_id == session.id))).all()
@@ -1115,7 +1139,7 @@ async def resolve_name_pick(session_id: uuid.UUID) -> None:
             "Name pick resolved",
             session_id=str(session_id),
         )
-        await _run_role_reveal(db, session)
+        await _run_role_reveal(db, session, enforce_audio_ready=False)
 
 
 async def acknowledge_role(db: AsyncSession, session: Session, player: Player) -> dict:

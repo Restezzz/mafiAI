@@ -611,13 +611,15 @@ export const useGameStore = create<GameState>((set, get) => ({
     // Go straight to role_reveal — players read their cards first.
     // Rules narrator plays AFTER all acknowledge (via transition_to_night).
     set((state) => {
-      if (
-        state.phase &&
-        state.phase.type !== 'role_reveal' &&
-        state.screen !== 'finale'
-      ) {
-        return state;
-      }
+      // game_started переводит в role_reveal. Игнорируем его только если игра
+      // уже ушла ДАЛЬШЕ выдачи ролей (ночь/день) или мы в финале — там это
+      // устаревшее/повторное событие, которое затёрло бы текущую фазу. А вот
+      // из пред-игровых фаз (story_vote / name_pick) переход в role_reveal
+      // обязан происходить вживую — раньше этот guard его глушил, и роль-ревил
+      // появлялся только после ручного обновления страницы.
+      const cur = state.phase?.type;
+      if (state.screen === 'finale' || state.result) return state;
+      if (cur === 'night' || cur === 'day') return state;
 
       return {
         phase,

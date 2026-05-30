@@ -80,6 +80,7 @@ from models.story import (
     StoryTransition,
 )
 from services.runtime_state import runtime_state
+from services.story_audio import variant_index_for_cue
 from services.timer_service import timer_service
 from services.ws_manager import ws_manager
 
@@ -758,10 +759,16 @@ def _build_narration_steps(
             and variants_by_trigger
             and cue.trigger_id in variants_by_trigger
         ):
-            variants = variants_by_trigger[cue.trigger_id]
+            variants = sorted(
+                variants_by_trigger[cue.trigger_id], key=lambda v: str(v.id)
+            )
             if variants:
-                seed = hash((str(session_id), str(cue.id))) if session_id else 0
-                chosen = variants[seed % len(variants)]
+                # Тот же детерминированный выбор, что и в story-scoped preload
+                # (collect_story_audio_urls) — чтобы предзагруженный файл совпал
+                # с тем, что реально звучит. Стабильный sha1 (не встроенный
+                # hash(), который солится PYTHONHASHSEED).
+                idx = variant_index_for_cue(session_id, cue.id, len(variants))
+                chosen = variants[idx]
                 variant_text = chosen.text
                 variant_duration_ms = chosen.duration_ms
                 if chosen.audio_file is not None:

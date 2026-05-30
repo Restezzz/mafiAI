@@ -200,7 +200,7 @@ export function preloadNarrationAudio(): Promise<AudioPreloadResult> {
       return result();
     }
 
-    await runWithConcurrency(urls, 4, async (url) => {
+    const loadOne = async (url: string) => {
       if (loadedUrls.has(url)) {
         updateProgress();
         return;
@@ -212,12 +212,25 @@ export function preloadNarrationAudio(): Promise<AudioPreloadResult> {
           blobUrls.set(url, blobUrl);
         }
         loadedUrls.add(url);
+        failedUrls.delete(url);
       } catch {
         failedUrls.add(url);
       } finally {
         updateProgress();
       }
-    });
+    };
+
+    await runWithConcurrency(urls, 4, loadOne);
+
+    // Транзиентные сбои (один-два файла отвалились по сети / backend ещё
+    // дописывал файл) раньше требовали ручного обновления страницы — игрок
+    // видел «Не удалось загрузить озвучку». Делаем несколько авто-проходов по
+    // ТОЛЬКО упавшим URL'ам с нарастающей паузой, прежде чем сдаться.
+    for (let retry = 0; retry < 3 && failedUrls.size > 0; retry += 1) {
+      await wait(500 * (retry + 1));
+      const pending = Array.from(failedUrls);
+      await runWithConcurrency(pending, 4, loadOne);
+    }
 
     currentProgress = {
       total: urls.length,

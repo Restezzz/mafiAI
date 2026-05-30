@@ -68,7 +68,7 @@ async def session_audio_plan(db: AsyncSession, session: Session) -> dict:
             ).all()
         )
         if story_ids:
-            urls = await collect_story_audio_urls(db, story_ids)
+            urls = await collect_story_audio_urls(db, story_ids, session_id=session.id)
             return {
                 "source": "story",
                 "version": story_audio_version(urls),
