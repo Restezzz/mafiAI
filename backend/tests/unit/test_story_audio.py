@@ -103,9 +103,9 @@ async def test_session_audio_plan_legacy_uses_global_manifest() -> None:
 
 
 @pytest.mark.asyncio
-async def test_session_audio_plan_story_engine_without_stories_falls_back() -> None:
-    # use_story_engine, но активных сюжетов нет → fallback на глобальный манифест,
-    # чтобы legacy-движок имел озвучку (см. session.story_id and use_story_engine).
+async def test_session_audio_plan_story_engine_before_selection_is_empty() -> None:
+    # use_story_engine, сюжет ещё НЕ выбран (story_id=None) → пустой план:
+    # заранее (до голосования) озвучку не качаем. Загрузится на name_pick.
     db = Mock()
     db.scalars = AsyncMock(return_value=_ScalarsResult([]))
     session = SimpleNamespace(
@@ -114,5 +114,22 @@ async def test_session_audio_plan_story_engine_without_stories_falls_back() -> N
 
     plan = await session_audio_plan(db, session)
 
-    assert plan["source"] == "manifest"
-    assert plan["via_api"] is False
+    assert plan["source"] == "story_pending"
+    assert plan["audio_urls"] == []
+    assert plan["via_api"] is True
+
+
+@pytest.mark.asyncio
+async def test_session_audio_plan_story_engine_after_selection_uses_chosen_story() -> None:
+    # Сюжет выбран (story_id проставлен) → план = озвучка ИМЕННО этого сюжета.
+    db = Mock()
+    db.scalars = AsyncMock(return_value=_ScalarsResult([]))
+    session = SimpleNamespace(
+        id=uuid.uuid4(), story_id=uuid.uuid4(), settings={"use_story_engine": True}
+    )
+
+    plan = await session_audio_plan(db, session)
+
+    assert plan["source"] == "story"
+    assert plan["via_api"] is True
+    assert isinstance(plan["audio_urls"], list)
