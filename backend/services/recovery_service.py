@@ -21,8 +21,12 @@ from core.utils import remaining_seconds
 from models.game_phase import GamePhase
 from models.session import Session
 from services.game_engine import (
+    NAME_PICK_DEFAULT_TIMER,
+    STORY_VOTE_DEFAULT_TIMER,
     execute_night_sequence,
     get_current_phase,
+    resolve_name_pick,
+    resolve_story_vote,
     resolve_votes,
     transition_to_day,
     transition_to_night,
@@ -132,6 +136,31 @@ async def _recover_one_session(session_id: uuid.UUID) -> None:
             if not timer_service.has_timer(session_id, "role_reveal"):
                 await timer_service.start_timer(session_id, "role_reveal", seconds, lambda: transition_to_night(session_id, 1))
                 log_event(logger, logging.INFO, "recovery.session_restored", "Recovered role reveal timer", session_id=str(session_id))
+            return
+
+        # story_vote timer (Story Engine pre-game): таймер фазы восстанавливаем
+        # из persisted phase_changed; resolve_story_vote идемпотентен.
+        if phase.phase_type == "story_vote":
+            seconds = remaining if remaining is not None else int((session.settings or {}).get("story_vote_timer_seconds") or STORY_VOTE_DEFAULT_TIMER)
+            if seconds <= 0:
+                await resolve_story_vote(session_id)
+                log_event(logger, logging.INFO, "recovery.session_restored", "Recovered story vote timeout", session_id=str(session_id))
+                return
+            if not timer_service.has_timer(session_id, "story_vote"):
+                await timer_service.start_timer(session_id, "story_vote", seconds, lambda: resolve_story_vote(session_id))
+                log_event(logger, logging.INFO, "recovery.session_restored", "Recovered story vote timer", session_id=str(session_id))
+            return
+
+        # name_pick timer (Story Engine pre-game): аналогично story_vote.
+        if phase.phase_type == "name_pick":
+            seconds = remaining if remaining is not None else int((session.settings or {}).get("name_pick_timer_seconds") or NAME_PICK_DEFAULT_TIMER)
+            if seconds <= 0:
+                await resolve_name_pick(session_id)
+                log_event(logger, logging.INFO, "recovery.session_restored", "Recovered name pick timeout", session_id=str(session_id))
+                return
+            if not timer_service.has_timer(session_id, "name_pick"):
+                await timer_service.start_timer(session_id, "name_pick", seconds, lambda: resolve_name_pick(session_id))
+                log_event(logger, logging.INFO, "recovery.session_restored", "Recovered name pick timer", session_id=str(session_id))
             return
 
         # day timers
