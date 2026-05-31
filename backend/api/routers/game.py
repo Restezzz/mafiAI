@@ -26,6 +26,7 @@ from models.night_action import NightAction
 from models.player import Player
 from models.role import Role
 from models.session import Session
+from models.session_story_state import SessionStoryState
 from models.story import StoryRoleOverride
 from schemas.game import (
     NamePickRequest,
@@ -421,7 +422,14 @@ async def state(
     phase = await get_current_phase(db, session_id)
     if phase is None and session.status == "active":
         await recover_missing_phase(session_id)
+        # recover_missing_phase коммитит в своей сессии; expire_all сбрасывает
+        # кэш, чтобы увидеть новую фазу. Но он же делает session/player
+        # expired — последующее обращение к их атрибутам в async-контексте
+        # вызывает sync lazy-load → MissingGreenlet → 500. Поэтому
+        # перезагружаем session/player отдельными await-запросами.
         db.expire_all()
+        session = await get_session_or_404(db, session_id)
+        player = await get_player_or_404(db, session_id, current_user.id)
         phase = await get_current_phase(db, session_id)
     if phase is None and session.status == "active":
         phase = await get_last_known_phase(db, session_id)
@@ -846,20 +854,34 @@ async def reset_to_lobby(
         await db.execute(sa_delete(DayVote).where(DayVote.phase_id.in_(phases)))
     await db.execute(sa_delete(GameEvent).where(GameEvent.session_id == session_id))
     await db.execute(sa_delete(GamePhase).where(GamePhase.session_id == session_id))
+    # Story Engine: удаляем прогресс прошлой игры, иначе start_story при новой
+    # игре «возобновит» сюжет с сохранённого current_step_id (роли не
+    # перевыдаются, фазы скипаются). См. story_runtime.start_story.
+    await db.execute(
+        sa_delete(SessionStoryState).where(SessionStoryState.session_id == session_id)
+    )
 
     # Удаляем всех игроков, кроме меня.
     await db.execute(
         sa_delete(Player).where(Player.session_id == session_id, Player.id != my_player.id)
     )
 
-    # Сбрасываю себя — alive, без роли, join_order=1.
+    # Сбрасываю себя — alive, без роли, join_order=1, имя — обратно на ник из
+    # профиля (в игре name перезаписывается выбранным/сюжетным именем).
     my_player.status = "alive"
     my_player.role_id = None
     my_player.join_order = 1
+    reset_name = (current_user.display_name or "").strip()
+    if not reset_name:
+        reset_name = current_user.email.split("@")[0]
+    my_player.name = reset_name[:32]
 
     # Сбрасываю сессию.
     session.status = "waiting"
     session.ended_at = None
+    # Сюжет выбирается заново в лобби / голосованием — обнуляем, чтобы новая
+    # игра не тянула устаревший story_id.
+    session.story_id = None
     session.host_user_id = current_user.id  # я теперь хост
     cur = clear_audio_preload(session.settings)
     cur.pop("game_pause", None)

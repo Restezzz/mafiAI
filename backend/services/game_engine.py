@@ -826,6 +826,22 @@ async def start_story_vote(db: AsyncSession, session: Session) -> dict:
     rt.timer_seconds = timer_seconds
     rt.timer_started_at = phase.started_at
 
+    # Персистим phase_changed, чтобы таймер фазы восстанавливался из БД
+    # (restore_runtime_like_fields). Без этого recovery_loop затирает
+    # runtime-таймер в None, а пауза снимает снапшот с remaining=None →
+    # после resume время «скачет» на 00:01 и /state падает.
+    await _persist_phase_changed(
+        db,
+        session.id,
+        phase.id,
+        {
+            "phase": {"type": "story_vote", "number": 0},
+            "timer_name": "story_vote",
+            "timer_seconds": timer_seconds,
+            "timer_started_at": phase.started_at.isoformat(),
+        },
+    )
+
     await ws_manager.send_to_session(
         session.id,
         {
@@ -1041,6 +1057,20 @@ async def start_name_pick(db: AsyncSession, session: Session) -> None:
     rt.timer_seconds = timer_seconds
     rt.timer_started_at = phase.started_at
 
+    # См. start_story_vote: persist phase_changed для reconnect/recovery-safe
+    # таймера (иначе recovery_loop затирает runtime-таймер в None).
+    await _persist_phase_changed(
+        db,
+        session.id,
+        phase.id,
+        {
+            "phase": {"type": "name_pick", "number": 0},
+            "timer_name": "name_pick",
+            "timer_seconds": timer_seconds,
+            "timer_started_at": phase.started_at.isoformat(),
+        },
+    )
+
     await ws_manager.send_to_session(
         session.id,
         {
@@ -1116,6 +1146,14 @@ async def submit_name_pick(
             "payload": {"player_id": str(player.id), "name": chosen, "auto": False},
         },
     )
+
+    # Если все живые игроки выбрали имя из набора сюжета — не ждём таймер,
+    # сразу закрываем фазу и раздаём роли (resolve_name_pick идемпотентен).
+    alive_others = [p for p in others if p.status == "alive"]
+    if all((p.name or "") in allowed for p in alive_others):
+        await timer_service.cancel_timer(session.id, "name_pick")
+        asyncio.create_task(resolve_name_pick(session.id))
+
     return {"ok": True}
 
 

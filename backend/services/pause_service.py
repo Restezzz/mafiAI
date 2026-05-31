@@ -11,6 +11,7 @@ from core.database import async_session_factory
 from core.exceptions import GameError
 from core.logging import log_event
 from core.utils import remaining_seconds, safe_uuid, utc_now
+from models.game_event import GameEvent
 from models.game_phase import GamePhase
 from models.session import Session
 from services.game_engine import execute_night_sequence, get_current_phase, resolve_votes, transition_to_voting
@@ -75,6 +76,38 @@ async def pause_game(db: AsyncSession, session: Session) -> dict:
         {"type": "game_paused", "payload": {"snapshot": snap, "announcement": {"trigger": "game_paused"}}},
     )
     return {"paused": True, "snapshot": snap}
+
+
+async def _persist_resume_timer(
+    session_id: uuid.UUID,
+    phase_id: uuid.UUID,
+    phase_type: str,
+    rem: int,
+    started_at,
+) -> None:
+    """Перезаписываем phase_changed свежим таймером после resume.
+
+    Для story_vote / name_pick таймер фазы персистится (см.
+    game_engine.start_*), и recovery_loop восстанавливает runtime из последнего
+    phase_changed. Если не обновить событие при resume — recovery затрёт свежий
+    (rem с момента снятия паузы) таймер исходным, и пауза «не зачтётся».
+    """
+    async with async_session_factory() as db:
+        db.add(
+            GameEvent(
+                id=uuid.uuid4(),
+                session_id=session_id,
+                phase_id=phase_id,
+                event_type="phase_changed",
+                payload={
+                    "phase": {"type": phase_type, "number": 0},
+                    "timer_name": phase_type,
+                    "timer_seconds": rem,
+                    "timer_started_at": started_at.isoformat(),
+                },
+            )
+        )
+        await db.commit()
 
 
 async def resume_game(session_id: uuid.UUID) -> None:
@@ -151,6 +184,7 @@ async def resume_game(session_id: uuid.UUID) -> None:
         rt.timer_name = "story_vote"
         rt.timer_seconds = rem
         rt.timer_started_at = utc_now()
+        await _persist_resume_timer(session_id, phase_id_uuid, "story_vote", rem, rt.timer_started_at)
         await timer_service.start_timer(session_id, "story_vote", rem, _on_story_vote_timeout)
         await ws_manager.send_to_session(
             session_id,
@@ -178,6 +212,7 @@ async def resume_game(session_id: uuid.UUID) -> None:
         rt.timer_name = "name_pick"
         rt.timer_seconds = rem
         rt.timer_started_at = utc_now()
+        await _persist_resume_timer(session_id, phase_id_uuid, "name_pick", rem, rt.timer_started_at)
         await timer_service.start_timer(session_id, "name_pick", rem, _on_name_pick_timeout)
         await ws_manager.send_to_session(
             session_id,
