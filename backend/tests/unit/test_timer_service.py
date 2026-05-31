@@ -112,3 +112,39 @@ async def test_start_timer_replaces_previous(ts, sid):
     await asyncio.sleep(0.05)
     assert not c1.is_set()
     assert c2.is_set()
+
+
+@pytest.mark.asyncio
+async def test_callback_self_cancel_does_not_abort(ts, sid):
+    """Регрессия: resolver вызывает cancel_timer своего же таймера изнутри
+    callback'а (как resume_game → resolve_story_vote → cancel_timer). Раньше это
+    отменяло текущую задачу и CancelledError рвал следующий await — переход
+    фазы не доходил до конца. cancel_timer не должен отменять текущую задачу."""
+    finished = False
+
+    async def cb():
+        nonlocal finished
+        # resolver чистит свой таймер...
+        await ts.cancel_timer(sid, "test")
+        # ...и продолжает работу (имитация db.commit() после cancel_timer)
+        await asyncio.sleep(0.01)
+        finished = True
+
+    await ts.start_timer(sid, "test", 0, cb)
+    await asyncio.sleep(0.1)
+    assert finished is True
+    assert ts.has_timer(sid, "test") is False
+
+
+@pytest.mark.asyncio
+async def test_callback_restart_same_name_timer_survives(ts, sid):
+    """callback отменяет свой таймер и запускает новый с тем же именем —
+    finally старой задачи не должно убирать новый таймер из реестра."""
+    async def cb():
+        await ts.cancel_timer(sid, "test")
+        await ts.start_timer(sid, "test", 10, AsyncMock())
+
+    await ts.start_timer(sid, "test", 0, cb)
+    await asyncio.sleep(0.05)
+    assert ts.has_timer(sid, "test") is True
+    await ts.cancel_timer(sid, "test")
