@@ -413,9 +413,14 @@ async def state(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Фиксируем id до любого expire_all: current_user живёт в той же db-сессии
+    # (общий Depends(get_db)), и expire_all() пометит его expired — тогда
+    # обращение к current_user.id в async-контексте даёт sync lazy-load →
+    # MissingGreenlet → 500. Локальный user_id безопасен.
+    user_id = current_user.id
     session = await get_session_or_404(db, session_id)
-    player = await get_player_or_404(db, session_id, current_user.id)
-    set_log_context(session_id=str(session_id), user_id=str(current_user.id))
+    player = await get_player_or_404(db, session_id, user_id)
+    set_log_context(session_id=str(session_id), user_id=str(user_id))
     if session.status == "waiting":
         raise GameError(403, "wrong_phase", "Игра ещё не началась")
 
@@ -429,7 +434,7 @@ async def state(
         # перезагружаем session/player отдельными await-запросами.
         db.expire_all()
         session = await get_session_or_404(db, session_id)
-        player = await get_player_or_404(db, session_id, current_user.id)
+        player = await get_player_or_404(db, session_id, user_id)
         phase = await get_current_phase(db, session_id)
     if phase is None and session.status == "active":
         phase = await get_last_known_phase(db, session_id)
@@ -468,7 +473,7 @@ async def state(
             "runtime_state_mismatch",
             "Runtime state restored from persisted events",
             session_id=str(session_id),
-            user_id=str(current_user.id),
+            user_id=str(user_id),
             restored=restored,
         )
 
