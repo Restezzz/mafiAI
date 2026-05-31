@@ -35,7 +35,13 @@ class TimerService:
     async def cancel_timer(self, session_id: uuid.UUID, timer_name: str):
         timers = self._timers.get(session_id, {})
         task = timers.pop(timer_name, None)
-        if task and not task.done():
+        # Не отменяем задачу, изнутри которой нас вызвали: иначе resolver,
+        # запущенный как сам callback таймера (await callback() в _run),
+        # отменяет собственную задачу и ловит CancelledError на следующем
+        # await (например, db.commit() в start_name_pick) — переход фазы
+        # обрывается. Достаточно убрать таймер из реестра: _run и так
+        # завершится сам после возврата из callback.
+        if task and not task.done() and task is not asyncio.current_task():
             task.cancel()
             log_event(logger, logging.DEBUG, "timer.cancelled", "Timer cancelled", session_id=str(session_id), timer_name=timer_name)
 
@@ -85,8 +91,12 @@ class TimerService:
         except Exception:
             log_exception(logger, "timer.callback_failed", "Timer callback failed", session_id=str(session_id), timer_name=timer_name)
         finally:
+            # Снимаем себя из реестра только если там всё ещё наша задача:
+            # callback мог перезапустить таймер с тем же именем (новая задача),
+            # и затирать его нельзя.
             timers = self._timers.get(session_id, {})
-            timers.pop(timer_name, None)
+            if timers.get(timer_name) is asyncio.current_task():
+                timers.pop(timer_name, None)
 
 
 timer_service = TimerService()
