@@ -28,26 +28,26 @@
     line-height: 1.5;
   }
 
-  &__grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-    gap: 12px;
+  &__list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
   }
 
   &__card {
     position: relative;
     display: flex;
-    align-items: center;
-    justify-content: center;
+    flex-direction: column;
+    align-items: stretch;
     gap: 6px;
+    width: 100%;
     min-height: 56px;
-    padding: 10px 14px;
+    padding: 12px 16px;
     border: 1.5px solid rgba(255, 255, 255, 0.08);
     border-radius: 14px;
     background: rgba(255, 255, 255, 0.03);
     color: #ffffff;
-    font-size: 15px;
-    font-weight: 600;
+    text-align: left;
     cursor: pointer;
     transition: border-color 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
 
@@ -68,8 +68,16 @@
     }
   }
 
+  &__card-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
   &__card-name {
     line-height: 1.2;
+    font-size: 16px;
+    font-weight: 600;
   }
 
   &__card-gender {
@@ -78,10 +86,16 @@
     color: rgba(255, 255, 255, 0.45);
   }
 
+  &__card-desc {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 400;
+    line-height: 1.45;
+    color: rgba(255, 255, 255, 0.6);
+    white-space: pre-wrap;
+  }
+
   &__card-check {
-    position: absolute;
-    top: 6px;
-    right: 6px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -90,15 +104,14 @@
     border-radius: 50%;
     background: #c81e1e;
     color: #ffffff;
+    margin-left: auto;
   }
 
   &__card-tag {
-    position: absolute;
-    bottom: 4px;
-    right: 8px;
     font-size: 10px;
     font-weight: 500;
     color: rgba(255, 255, 255, 0.5);
+    margin-left: auto;
   }
 
   &__empty {

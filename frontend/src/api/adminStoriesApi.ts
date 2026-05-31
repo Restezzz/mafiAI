@@ -69,6 +69,7 @@ export interface StoryName {
   id: string;
   key: string;
   display_name: string;
+  description: string | null;
   sort_order: number;
   base_audio_file_id: string | null;
   base_audio_url: string | null;
@@ -105,6 +106,7 @@ export interface StoryRoleOverride {
   id: string;
   role_slug: string;
   display_name: string | null;
+  description: string | null;
   card_front_image_id: string | null;
   card_front_url: string | null;
   card_back_image_id: string | null;
@@ -213,12 +215,15 @@ export interface StoryUpdatePayload {
 export interface StoryNameCreatePayload {
   key: string;
   display_name: string;
+  description?: string | null;
   sort_order?: number;
   base_audio_file_id?: string | null;
 }
 
 export interface StoryNameUpdatePayload {
   display_name?: string;
+  description?: string | null;
+  unset_description?: boolean;
   sort_order?: number;
   base_audio_file_id?: string | null;
   unset_base_audio?: boolean;
@@ -243,6 +248,7 @@ export interface StoryNameVariantAssetUpdatePayload {
 export interface StoryRoleOverrideCreatePayload {
   role_slug: string;
   display_name?: string | null;
+  description?: string | null;
   card_front_image_id?: string | null;
   card_back_image_id?: string | null;
 }
@@ -250,6 +256,8 @@ export interface StoryRoleOverrideCreatePayload {
 export interface StoryRoleOverrideUpdatePayload {
   display_name?: string | null;
   unset_display_name?: boolean;
+  description?: string | null;
+  unset_description?: boolean;
   card_front_image_id?: string | null;
   unset_card_front?: boolean;
   card_back_image_id?: string | null;

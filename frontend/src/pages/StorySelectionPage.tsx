@@ -5,6 +5,7 @@ import Badge from '../components/ui/Badge';
 import Alert from '../components/ui/Alert';
 import Timer from '../components/ui/Timer';
 import GameScreenHeader from '../components/game/GameScreenHeader';
+import DevPlayerQuickPill from '../components/dev/DevPlayerQuickPill';
 import { useSessionStore } from '../stores/sessionStore';
 import { useGameStore } from '../stores/gameStore';
 import audioManifest from '../data/audioManifest.json';
@@ -312,8 +313,30 @@ export default function StorySelectionPage() {
     }
   };
 
+  const devPlayerLinks = session?.dev_lobby?.player_links ?? [];
+  const devSlotLabels = React.useMemo(() => {
+    const map: Record<number, string> = {};
+    for (const p of players) {
+      if (p.join_order != null) map[p.join_order] = p.name;
+    }
+    return map;
+  }, [players]);
+  const handleOpenDevPlayer = (url: string, isHostSlot: boolean) => {
+    if (isHostSlot) return;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
   return (
     <div className="story-page">
+      {isHost && session?.dev_lobby?.is_test_lobby && devPlayerLinks.length > 0 && (
+        <div className="game-dev-pill-anchor">
+          <DevPlayerQuickPill
+            playerLinks={devPlayerLinks}
+            onOpenPlayer={handleOpenDevPlayer}
+            slotLabels={devSlotLabels}
+          />
+        </div>
+      )}
       <GameScreenHeader
         title={phase === 'story' ? 'Сюжет' : useStoryEngine ? 'Подготовка' : 'Выбор персонажа'}
         showPause={false}

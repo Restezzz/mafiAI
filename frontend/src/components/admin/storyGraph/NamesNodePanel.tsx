@@ -72,6 +72,31 @@ function slugify(value: string): string {
     .slice(0, 40);
 }
 
+function NameDescriptionField({
+  value,
+  onSave,
+}: {
+  value: string;
+  onSave: (description: string) => void;
+}) {
+  const [text, setText] = useState(value);
+  useEffect(() => {
+    setText(value);
+  }, [value]);
+  return (
+    <textarea
+      className="admin-input step-edit-panel__name-desc"
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => {
+        if (value !== text) onSave(text);
+      }}
+      placeholder="Описание имени (показывается при выборе; необязательно)"
+      rows={2}
+    />
+  );
+}
+
 export default function NamesNodePanel({ storyId, story, onStoryChanged }: Props) {
   const names = story.names;
   const variants = story.name_variants;
@@ -158,6 +183,25 @@ export default function NamesNodePanel({ storyId, story, onStoryChanged }: Props
         onStoryChanged();
       } catch (err) {
         logger.warn('admin.story.name_base_audio_failed', 'set base audio failed', {
+          error: parseApiError(err),
+        });
+      }
+    },
+    [storyId, onStoryChanged],
+  );
+
+  const setNameDescription = useCallback(
+    async (nameId: string, description: string) => {
+      const trimmed = description.trim();
+      try {
+        await adminStoriesApi.updateStoryName(
+          storyId,
+          nameId,
+          trimmed ? { description: trimmed } : { unset_description: true },
+        );
+        onStoryChanged();
+      } catch (err) {
+        logger.warn('admin.story.name_description_failed', 'set description failed', {
           error: parseApiError(err),
         });
       }
@@ -396,6 +440,10 @@ export default function NamesNodePanel({ storyId, story, onStoryChanged }: Props
                   </select>
                 )}
               </div>
+              <NameDescriptionField
+                value={n.description ?? ''}
+                onSave={(desc) => setNameDescription(n.id, desc)}
+              />
             </div>
           ))}
         </div>

@@ -162,6 +162,7 @@ def _serialize_story_name(n: StoryName) -> StoryNameRead:
         id=str(n.id),
         key=n.key,
         display_name=n.display_name,
+        description=n.description,
         sort_order=n.sort_order,
         base_audio_file_id=str(n.base_audio_file_id) if n.base_audio_file_id else None,
         base_audio_url=_audio_url(audio),
@@ -206,6 +207,7 @@ def _serialize_role_override(o: StoryRoleOverride) -> StoryRoleOverrideRead:
         id=str(o.id),
         role_slug=o.role_slug,
         display_name=o.display_name,
+        description=o.description,
         card_front_image_id=str(o.card_front_image_id) if o.card_front_image_id else None,
         card_front_url=_image_url(o.card_front_image),
         card_back_image_id=str(o.card_back_image_id) if o.card_back_image_id else None,
@@ -1771,6 +1773,7 @@ async def create_story_name(
         story_id=story_id,
         key=payload.key,
         display_name=payload.display_name,
+        description=payload.description,
         sort_order=payload.sort_order,
         base_audio_file_id=payload.base_audio_file_id,
     )
@@ -1806,6 +1809,9 @@ async def update_story_name(
         audio = await db.get(NarratorAudioFile, data["base_audio_file_id"])
         if audio is None:
             raise GameError(404, "audio_not_found", "Аудио-файл не найден")
+    if data.pop("unset_description", False):
+        name.description = None
+        data.pop("description", None)
     for key, value in data.items():
         setattr(name, key, value)
     await db.commit()
@@ -1911,6 +1917,7 @@ async def create_role_override(
         story_id=story_id,
         role_slug=payload.role_slug,
         display_name=payload.display_name,
+        description=payload.description,
         card_front_image_id=payload.card_front_image_id,
         card_back_image_id=payload.card_back_image_id,
     )
@@ -1944,6 +1951,12 @@ async def update_role_override(
     elif "display_name" in data:
         override.display_name = data["display_name"]
     data.pop("display_name", None)
+
+    if data.pop("unset_description", False):
+        override.description = None
+    elif "description" in data:
+        override.description = data["description"]
+    data.pop("description", None)
 
     if data.pop("unset_card_front", False):
         override.card_front_image_id = None

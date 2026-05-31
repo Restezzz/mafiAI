@@ -568,6 +568,11 @@ async def state(
                         if role_override and role_override.display_name
                         else role.name
                     ),
+                    "description": (
+                        role_override.description
+                        if role_override and role_override.description
+                        else None
+                    ),
                     "card_front_url": (
                         f"/images/{role_override.card_front_image.storage_path}"
                         if role_override and role_override.card_front_image

@@ -11,6 +11,8 @@ export interface Role {
    * name, а card_*_url == null (фронт падает на статический каталог).
    */
   display_name?: string | null;
+  /** Пер-сюжетное описание роли (StoryRoleOverride.description). null => дефолт из каталога. */
+  description?: string | null;
   card_front_url?: string | null;   // относительный путь "/images/..."
   card_back_url?: string | null;    // относительный путь "/images/..."
 }
@@ -59,6 +61,8 @@ export interface StoryVoteInfo {
 export interface NamePickOption {
   display: string;
   gender: 'm' | 'f' | null;
+  /** Описание имени (StoryName.description) — рисуется под именем при выборе. */
+  description?: string | null;
 }
 
 export interface NamePickInfo {

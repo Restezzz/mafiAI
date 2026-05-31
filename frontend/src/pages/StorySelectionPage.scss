@@ -8,6 +8,16 @@
   margin: 0 auto;
 }
 
+// Якорь для плавающего меню тестовых игроков (тот же, что на GamePage) —
+// дублируем здесь, чтобы позиционирование работало независимо от порядка
+// загрузки lazy-чанков страниц.
+.game-dev-pill-anchor {
+  position: fixed;
+  top: 6px;
+  right: 6px;
+  z-index: 80;
+}
+
 .story-header {
   display: flex;
   align-items: center;
