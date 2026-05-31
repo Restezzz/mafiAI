@@ -404,6 +404,7 @@ class StoryNameRead(BaseModel):
     id: str
     key: str
     display_name: str
+    description: str | None = None
     sort_order: int
     base_audio_file_id: str | None = None
     base_audio_url: str | None = None
@@ -413,6 +414,7 @@ class StoryNameRead(BaseModel):
 class StoryNameCreate(BaseModel):
     key: str = Field(..., min_length=1, max_length=40)
     display_name: str = Field(..., min_length=1, max_length=50)
+    description: str | None = Field(default=None, max_length=2000)
     sort_order: int = Field(default=0, ge=0, le=9999)
     base_audio_file_id: UUID | None = None
 
@@ -426,6 +428,8 @@ class StoryNameCreate(BaseModel):
 
 class StoryNameUpdate(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=50)
+    description: str | None = Field(default=None, max_length=2000)
+    unset_description: bool = False
     sort_order: int | None = Field(default=None, ge=0, le=9999)
     base_audio_file_id: UUID | None = None
     unset_base_audio: bool = False
@@ -497,6 +501,7 @@ class StoryRoleOverrideRead(BaseModel):
     id: str
     role_slug: str
     display_name: str | None = None
+    description: str | None = None
     card_front_image_id: str | None = None
     card_front_url: str | None = None
     card_back_image_id: str | None = None
@@ -506,6 +511,7 @@ class StoryRoleOverrideRead(BaseModel):
 class StoryRoleOverrideCreate(BaseModel):
     role_slug: str = Field(..., min_length=1, max_length=20)
     display_name: str | None = Field(default=None, max_length=50)
+    description: str | None = Field(default=None, max_length=2000)
     card_front_image_id: UUID | None = None
     card_back_image_id: UUID | None = None
 
@@ -513,6 +519,8 @@ class StoryRoleOverrideCreate(BaseModel):
 class StoryRoleOverrideUpdate(BaseModel):
     display_name: str | None = Field(default=None, max_length=50)
     unset_display_name: bool = False
+    description: str | None = Field(default=None, max_length=2000)
+    unset_description: bool = False
     card_front_image_id: UUID | None = None
     unset_card_front: bool = False
     card_back_image_id: UUID | None = None

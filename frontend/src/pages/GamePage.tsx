@@ -267,7 +267,7 @@ export default function GamePage() {
   const roleImage = overrideUrl(myRole.card_front_url) ?? roleInfo?.image ?? CARD_BACK_IMAGE;
   const cardBackImage = overrideUrl(myRole.card_back_url) ?? CARD_BACK_IMAGE;
   const roleDisplayName = myRole.display_name || roleInfo?.displayName || myRole.name;
-  const roleDesc = roleInfo?.description ?? 'Роль без описания способностей.';
+  const roleDesc = myRole.description || roleInfo?.description || 'Роль без описания способностей.';
   const nightAction = myRole.abilities?.night_action;
   const devPlayerLinks = session?.dev_lobby?.player_links ?? [];
 

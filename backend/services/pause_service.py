@@ -229,6 +229,7 @@ async def resume_game(session_id: uuid.UUID) -> None:
     # параллельный запуск transition_to_night, который сыграет rules-narration
     # и создаст лишнюю фазу.
     if use_story:
+        resumed_at = utc_now()
         await ws_manager.send_to_session(
             session_id,
             {
@@ -236,11 +237,22 @@ async def resume_game(session_id: uuid.UUID) -> None:
                 "payload": {
                     "phase": {"type": ptype, "number": int(snap.get("phase_number") or 0)},
                     "timer_seconds": rem,
-                    "timer_started_at": utc_now().isoformat(),
+                    "timer_started_at": resumed_at.isoformat(),
                     "announcement": {"trigger": "game_resumed"},
                 },
             },
         )
+        # КРИТИЧНО: проставляем runtime-таймер на оставшееся время (rem) от
+        # момента resume. Иначе rt.timer_started_at/timer_seconds остаются
+        # с момента старта фазы ДО паузы (для day-фаз story-движка handler
+        # _wait_or_pause припаркован и не трогает rt), и следующий GET /state
+        # (refresh страницы) пересчитает remaining = timer_seconds −
+        # (now − старый timer_started_at), вычитая всё время паузы.
+        # Для night role_action start_story перезапустит _run_loop и handler
+        # перезапишет эти поля полным таймером — наш сет там безопасно
+        # переопределится.
+        rt.timer_seconds = rem
+        rt.timer_started_at = resumed_at
         from services.story_runtime import start_story
         await start_story(session_id)
         log_event(

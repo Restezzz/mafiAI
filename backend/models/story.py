@@ -447,6 +447,7 @@ class StoryName(Base):
     )
     key: Mapped[str] = mapped_column(String(40), nullable=False)
     display_name: Mapped[str] = mapped_column(String(50), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     base_audio_file_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("narrator_audio_files.id", ondelete="SET NULL"),
@@ -591,6 +592,7 @@ class StoryRoleOverride(Base):
     )
     role_slug: Mapped[str] = mapped_column(String(20), nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     card_front_image_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("image_files.id", ondelete="SET NULL"),

@@ -132,6 +132,15 @@ export default function LobbyPage() {
           navigate('/app', { replace: true });
           return;
         }
+        if (loaded && loaded.status === 'active') {
+          // Игра уже идёт (например, открыли вкладку синтетического игрока во
+          // время активной игры) — сразу уходим в игру. Иначе зависаем в лобби
+          // ожидания, т.к. role_assigned по WS для уже идущей игры не придёт,
+          // а именно этот event инициирует переход в игру (см. эффект ниже).
+          allowNavigationRef.current = true;
+          navigate(`/game/${loaded.id}`, { replace: true });
+          return;
+        }
         if (loaded) {
           wsClient.connect(loaded.id);
         }

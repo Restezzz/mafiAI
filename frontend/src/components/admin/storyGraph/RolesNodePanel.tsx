@@ -124,6 +124,25 @@ export default function RolesNodePanel({ storyId, story, onStoryChanged }: Props
     [storyId, ensureOverride, onStoryChanged],
   );
 
+  const handleDescription = useCallback(
+    async (roleSlug: string, description: string) => {
+      try {
+        const ov = await ensureOverride(roleSlug);
+        const trimmed = description.trim();
+        await adminStoriesApi.updateRoleOverride(storyId, ov.id, trimmed
+          ? { description: trimmed }
+          : { unset_description: true });
+        onStoryChanged();
+      } catch (err) {
+        setError('Не удалось сохранить описание');
+        logger.warn('admin.story.role_override_desc_failed', 'desc failed', {
+          error: parseApiError(err),
+        });
+      }
+    },
+    [storyId, ensureOverride, onStoryChanged],
+  );
+
   const handleCard = useCallback(
     async (roleSlug: string, side: 'front' | 'back', file: File | null) => {
       setBusySlug(roleSlug);
@@ -191,6 +210,7 @@ export default function RolesNodePanel({ storyId, story, onStoryChanged }: Props
             override={ov}
             busy={busySlug === role.slug}
             onName={(name) => handleName(role.slug, name)}
+            onDescription={(desc) => handleDescription(role.slug, desc)}
             onCard={(side, file) => handleCard(role.slug, side, file)}
             onReset={() => handleReset(role.slug)}
           />
@@ -205,6 +225,7 @@ function RoleRow({
   override,
   busy,
   onName,
+  onDescription,
   onCard,
   onReset,
 }: {
@@ -212,6 +233,7 @@ function RoleRow({
   override?: StoryRoleOverride;
   busy: boolean;
   onName: (name: string) => void;
+  onDescription: (description: string) => void;
   onCard: (side: 'front' | 'back', file: File | null) => void;
   onReset: () => void;
 }) {
@@ -219,6 +241,10 @@ function RoleRow({
   useEffect(() => {
     setName(override?.display_name ?? '');
   }, [override?.display_name]);
+  const [description, setDescription] = useState(override?.description ?? '');
+  useEffect(() => {
+    setDescription(override?.description ?? '');
+  }, [override?.description]);
 
   return (
     <div className="roles-node-panel__role">
@@ -245,6 +271,16 @@ function RoleRow({
           if ((override?.display_name ?? '') !== name) onName(name);
         }}
         placeholder="Новое имя роли (необязательно)"
+      />
+      <textarea
+        className="admin-input roles-node-panel__desc"
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        onBlur={() => {
+          if ((override?.description ?? '') !== description) onDescription(description);
+        }}
+        placeholder="Описание роли (заменяет дефолтное; необязательно)"
+        rows={3}
       />
       <div className="roles-node-panel__cards">
         <CardSlot

@@ -92,7 +92,7 @@ export default function NamePickScreen() {
           имя выберется автоматически.
         </p>
 
-        <div className="name-pick__grid">
+        <div className="name-pick__list">
           {names.map((n) => {
             const isTaken = taken.has(n.display);
             const isSelected = selected === n.display;
@@ -109,18 +109,23 @@ export default function NamePickScreen() {
                 disabled={isTaken || submitted}
                 onClick={() => !submitted && !isTaken && setSelected(n.display)}
               >
-                <span className="name-pick__card-name">{n.display}</span>
-                {n.gender && (
-                  <span className="name-pick__card-gender">
-                    {n.gender === 'f' ? 'ж' : 'м'}
-                  </span>
+                <div className="name-pick__card-head">
+                  <span className="name-pick__card-name">{n.display}</span>
+                  {n.gender && (
+                    <span className="name-pick__card-gender">
+                      {n.gender === 'f' ? 'ж' : 'м'}
+                    </span>
+                  )}
+                  {(isSelected || isMine) && (
+                    <span className="name-pick__card-check">
+                      <Check size={16} />
+                    </span>
+                  )}
+                  {isTaken && <span className="name-pick__card-tag">занято</span>}
+                </div>
+                {n.description && (
+                  <p className="name-pick__card-desc">{n.description}</p>
                 )}
-                {(isSelected || isMine) && (
-                  <span className="name-pick__card-check">
-                    <Check size={16} />
-                  </span>
-                )}
-                {isTaken && <span className="name-pick__card-tag">занято</span>}
               </button>
             );
           })}

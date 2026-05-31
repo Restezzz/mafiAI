@@ -538,6 +538,7 @@ def _role_payload_with_override(
         "team": role.team,
         "abilities": role.abilities,
         "display_name": ov.display_name if ov and ov.display_name else role.name,
+        "description": ov.description if ov and ov.description else None,
         "card_front_url": (
             f"/images/{ov.card_front_image.storage_path}"
             if ov and ov.card_front_image
@@ -991,10 +992,11 @@ async def _name_pick_options(db: AsyncSession, session: Session) -> list[dict]:
         ).all()
         if rows:
             return [
-                {"display": n.display_name, "gender": None} for n in rows
+                {"display": n.display_name, "gender": None, "description": n.description}
+                for n in rows
             ]
     return [
-        {"display": n.display, "gender": n.gender}
+        {"display": n.display, "gender": n.gender, "description": None}
         for n in get_audio_manifest().names
     ]
 
