@@ -7,8 +7,8 @@
  * игроками, недоступны. По истечении таймера бэк автоматически добивает
  * незанятые имена и переходит к role_reveal.
  */
-import React, { useMemo, useState } from 'react';
-import { Check } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Check, Loader2 } from 'lucide-react';
 import { useGameStore } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useCountdown } from '../../hooks/useCountdown';
@@ -16,6 +16,15 @@ import Timer from '../ui/Timer';
 import Button from '../ui/Button';
 import GameScreenHeader from './GameScreenHeader';
 import { getApiErrorMessage } from '../../utils/getApiErrorMessage';
+import { sessionApi } from '../../api/sessionApi';
+import { logger } from '../../services/logger';
+import {
+  configureNarrationAudioPlan,
+  getAudioPreloadProgress,
+  preloadNarrationAudio,
+  subscribeAudioPreload,
+  type AudioPreloadProgress,
+} from '../../utils/audioPreloader';
 import './NamePickScreen.scss';
 
 const NAME_PICK_FALLBACK_SECONDS = 60;
@@ -30,6 +39,53 @@ export default function NamePickScreen() {
   // ростера сессии (обновляется по WS player_renamed), плюс серверный снапшот.
   const players = useSessionStore((s) => s.players);
   const timerPaused = useSessionStore((s) => s.timerPaused);
+  const sessionId = useSessionStore((s) => s.session?.id ?? null);
+
+  // Озвучку выбранного сюжета качаем здесь — на фазе name_pick (story_id уже
+  // определён голосованием), а не заранее в комнате ожидания. Окна таймера
+  // (60с) хватает; воспроизведение на role_reveal подстраховано live-стримом
+  // из backend storage, если что-то не успело докачаться. Прогресс показываем
+  // ненавязчивой плашкой.
+  const [audioProgress, setAudioProgress] = useState<AudioPreloadProgress>(() =>
+    getAudioPreloadProgress()
+  );
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    const unsubscribe = subscribeAudioPreload(setAudioProgress);
+    sessionApi
+      .getAudioPreloadManifest(sessionId)
+      .then((res) => {
+        if (cancelled) return undefined;
+        configureNarrationAudioPlan({
+          urls: res.data.audio_urls,
+          version: res.data.version,
+          viaApi: res.data.via_api,
+        });
+        return preloadNarrationAudio();
+      })
+      .catch((err) => {
+        logger.warn('api.nonfatal_failure', 'Name pick audio preload failed', {
+          reason: err instanceof Error ? err.message : String(err),
+          sessionId,
+        });
+      });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [sessionId]);
+
+  const audioLoading = audioProgress.total > 0 && !audioProgress.done;
+  const audioPercent =
+    audioProgress.total > 0
+      ? Math.min(
+          100,
+          Math.round(
+            ((audioProgress.loaded + audioProgress.failed) / audioProgress.total) * 100
+          )
+        )
+      : 100;
 
   // На реконнекте my_name может быть лобби-плейсхолдером («Игрок 3»), которого
   // нет в наборе имён сюжета — тогда ничего не предвыбираем (иначе кнопка
@@ -87,6 +143,13 @@ export default function NamePickScreen() {
       />
 
       <main className="name-pick__main">
+        {audioLoading && (
+          <div className="name-pick__audio" role="status" aria-live="polite">
+            <Loader2 size={14} className="name-pick__audio-spinner" />
+            <span>Озвучка загружается… {audioPercent}%</span>
+          </div>
+        )}
+
         <p className="name-pick__hint">
           Выберите имя своего персонажа и нажмите «Подтвердить». Не успеете —
           имя выберется автоматически.

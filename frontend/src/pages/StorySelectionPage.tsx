@@ -369,7 +369,7 @@ export default function StorySelectionPage() {
           <div className="story-name-pick">
             <p className="story-name-pick__hint">
               {useStoryEngine
-                ? 'Готовим озвучку. После старта вы проголосуете за сюжет и выберете имя.'
+                ? 'После старта вы проголосуете за сюжет и выберете имя. Озвучка выбранного сюжета загрузится на этапе выбора имени.'
                 : 'Выберите своё имя. Имена используются ведущим в озвучке.'}
             </p>
             {!useStoryEngine && (
@@ -378,6 +378,10 @@ export default function StorySelectionPage() {
                 <span className="story-name-pick__current-name">{myName || '—'}</span>
               </div>
             )}
+            {/* В story-движке озвучку грузим уже после выбора сюжета (фаза
+                name_pick), поэтому в комнате ожидания карточку прелоада не
+                показываем — грузить заранее нечего. */}
+            {!useStoryEngine && (
             <div className={`story-audio story-audio--${audioUiState}`} role="status" aria-live="polite">
               <div className="story-audio__icon" aria-hidden="true">
                 {audioUiState === 'loading' && (
@@ -459,6 +463,7 @@ export default function StorySelectionPage() {
                 )}
               </div>
             </div>
+            )}
             {!useStoryEngine && (
             <div className="story-name-pick__grid">
               {NAMES.map((n) => {
@@ -507,7 +512,9 @@ export default function StorySelectionPage() {
               <h4 className="story-name-pick__players-title">Игроки в лобби</h4>
               <ul className="story-name-pick__players-list">
                 {players.map((p) => {
-                  const isAudioReady = audioReadyPlayerIds.has(p.id);
+                  // story-сессии не качают озвучку в комнате ожидания —
+                  // индикатор готовности здесь не имеет смысла.
+                  const isAudioReady = useStoryEngine || audioReadyPlayerIds.has(p.id);
                   return (
                     <li
                       key={p.id}

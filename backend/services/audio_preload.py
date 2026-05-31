@@ -16,7 +16,6 @@ from core.exceptions import GameError
 from core.utils import utc_now
 from models.player import Player
 from models.session import Session
-from models.story import Story
 from services.audio_manifest import AudioManifest, get_manifest
 from services.story_audio import collect_story_audio_urls, story_audio_version
 
@@ -47,34 +46,37 @@ def _audio_urls_count(manifest: AudioManifest) -> int:
 async def session_audio_plan(db: AsyncSession, session: Session) -> dict:
     """Набор озвучки, который должен предзагрузить клиент для этой сессии.
 
-    - story-движок (``use_story_engine`` и есть голосуемые сюжеты): только
-      аудио сюжетов, которые сессия МОЖЕТ сыграть — объединение всех голосуемых
-      (а не весь глобальный каталог ведущего). Берём именно голосуемый набор, а
-      не уже выбранный ``story_id``: набор стабилен от лобби до раздачи ролей,
-      поэтому версия-хеш (а значит и readiness-карта игроков) не «протухает»
-      после голосования за сюжет. ``via_api=True`` — файлы в backend storage.
+    - story-движок, сюжет уже выбран (``story_id`` проставлен после
+      голосования): только аудио ЭТОГО сюжета. Раньше тянулось объединение всех
+      голосуемых сюжетов ещё до выбора — нелогично и лишний трафик. Теперь фронт
+      качает озвучку конкретного сюжета на фазе ``name_pick`` (после
+      ``story_vote``). ``via_api=True`` — файлы в backend storage.
+    - story-движок, сюжет ещё НЕ выбран (комната ожидания / голосование): пустой
+      план — заранее качать нечего, ``required=False``. Старт игры для
+      story-сессий и так не гейтится готовностью озвучки (см. start_story_vote),
+      а воспроизведение умеет тянуть файл из storage на лету.
     - иначе (legacy / нет сюжетов): глобальный манифест ведущего (как раньше),
       ``via_api`` False — seed-файлы отдаёт origin фронта.
     """
     settings = dict(session.settings or {})
     if settings.get("use_story_engine"):
-        story_ids = list(
-            (
-                await db.scalars(
-                    select(Story.id).where(
-                        Story.is_active.is_(True), Story.is_obsolete.is_(False)
-                    )
-                )
-            ).all()
-        )
-        if story_ids:
-            urls = await collect_story_audio_urls(db, story_ids, session_id=session.id)
+        if session.story_id is not None:
+            urls = await collect_story_audio_urls(
+                db, [session.story_id], session_id=session.id
+            )
             return {
                 "source": "story",
                 "version": story_audio_version(urls),
                 "audio_urls": urls,
                 "via_api": True,
             }
+        # Сюжет ещё не выбран — ничего не предзагружаем заранее.
+        return {
+            "source": "story_pending",
+            "version": story_audio_version([]),
+            "audio_urls": [],
+            "via_api": True,
+        }
 
     manifest = get_manifest()
     return {

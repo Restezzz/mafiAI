@@ -20,6 +20,28 @@
     overflow-y: auto;
   }
 
+  &__audio {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin: 0 auto 12px;
+    padding: 6px 12px;
+    width: fit-content;
+    max-width: 100%;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.04);
+    font-size: 12px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  &__audio-spinner {
+    flex-shrink: 0;
+    animation: name-pick-spin 0.9s linear infinite;
+  }
+
   &__hint {
     margin: 0 0 16px;
     font-size: 13px;
@@ -134,5 +156,11 @@
     text-align: center;
     font-size: 13px;
     color: #ff4444;
+  }
+}
+
+@keyframes name-pick-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
