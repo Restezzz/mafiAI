@@ -1010,7 +1010,9 @@ async def _handle_role_action(session_id: uuid.UUID, step: StoryStep) -> None:
       4. Ждать night_action_event (или timeout). По событию — завершить.
 
     MVP-ограничения: один actor (для мафии берётся первый по join_order),
-    нет lover_block, нет doctor heal history.
+    нет lover_block. Селф-хил доктора ограничен одним разом за игру:
+    после использования себя исключаем из available_targets (см.
+    doctor_self_heal_used), а submit отклоняется в роутере night_action.
     """
     payload = step.payload or {}
     role_slug = payload.get("role_slug")
@@ -1068,9 +1070,16 @@ async def _handle_role_action(session_id: uuid.UUID, step: StoryStep) -> None:
             return
 
         # available_targets: все живые кроме самого actor (если exclude_self).
+        # Доктор может лечить себя лишь раз за игру — после этого исключаем
+        # себя из целей, даже если exclude_self_target снят.
+        self_heal_used = False
+        if action_type == "heal" and not exclude_self and actor is not None:
+            from services.game_engine import doctor_self_heal_used
+            self_heal_used = await doctor_self_heal_used(db, session_id, actor.id)
         target_players = [
             p for p in alive_players
-            if not exclude_self or (actor is None or p.id != actor.id)
+            if (not exclude_self or actor is None or p.id != actor.id)
+            and not (self_heal_used and actor is not None and p.id == actor.id)
         ]
         targets = [_player_target_dict(p) for p in target_players]
 

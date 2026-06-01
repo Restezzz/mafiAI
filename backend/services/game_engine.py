@@ -1432,6 +1432,28 @@ async def transition_to_night(session_id: uuid.UUID, phase_number: int):
         _end_phase_transition(session_id)
 
 
+async def doctor_self_heal_used(
+    db: AsyncSession, session_id: uuid.UUID, actor_id: uuid.UUID
+) -> bool:
+    """True, если доктор (actor) уже хоть раз лечил сам себя за эту игру.
+
+    Себя доктор может вылечить только один раз за партию. Используется и для
+    серверной проверки на submit, и для исключения себя из списка целей.
+    """
+    used = await db.scalar(
+        select(NightAction.id)
+        .join(GamePhase, NightAction.phase_id == GamePhase.id)
+        .where(
+            GamePhase.session_id == session_id,
+            NightAction.actor_player_id == actor_id,
+            NightAction.action_type == "heal",
+            NightAction.target_player_id == actor_id,
+        )
+        .limit(1)
+    )
+    return used is not None
+
+
 async def execute_night_sequence(
     db: AsyncSession,
     session: Session,
@@ -1493,10 +1515,12 @@ async def execute_night_sequence(
                     "name": restricted_p.name,
                     "reason": "Нельзя лечить одного и того же два раунда подряд",
                 }
+        self_heal_used = await doctor_self_heal_used(db, session.id, actor.id)
         available_targets = [
             _player_target_dict(p)
             for p in alive
             if p.id != prev_heal_target_id
+            and not (self_heal_used and p.id == actor.id)
         ]
         return available_targets, heal_restriction
 
