@@ -28,7 +28,6 @@ import {
   applyEdgeChanges,
   addEdge,
   useReactFlow,
-  MarkerType,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
@@ -45,7 +44,8 @@ import PaneContextMenu from '../../components/admin/storyGraph/PaneContextMenu';
 import StepEditPanel from '../../components/admin/storyGraph/StepEditPanel';
 import EdgeEditPanel from '../../components/admin/storyGraph/EdgeEditPanel';
 import StorySettingsPanel from '../../components/admin/storyGraph/StorySettingsPanel';
-import { Trash2, LayoutGrid, Save, ArrowLeft, Settings } from 'lucide-react';
+import { edgeVisual } from '../../components/admin/storyGraph/conditionUtils';
+import { Trash2, LayoutGrid, Save, ArrowLeft, Settings, AlertTriangle } from 'lucide-react';
 import './AdminStoryGraphPage.scss';
 
 const nodeTypes = { step: StepNode };
@@ -55,23 +55,12 @@ const nodeTypes = { step: StepNode };
 const LAYOUT_SAVE_DEBOUNCE_MS = 600;
 
 function buildEdges(transitions: StoryTransition[]): Edge[] {
-  return transitions.map((t) => {
-    const hasCondition = t.condition !== null;
-    return {
-      id: t.id,
-      source: t.from_step_id,
-      target: t.to_step_id,
-      // Метка edge: priority + признак условия. Условие пока не парсим
-      // в человекочитаемый текст — это будет в этапе 4.4 (popup-эдит).
-      label: hasCondition ? `[p${t.priority}] cond` : t.priority > 0 ? `p${t.priority}` : undefined,
-      animated: !hasCondition,
-      style: { stroke: hasCondition ? '#f39c12' : '#4a90e2', strokeWidth: 2 },
-      labelStyle: { fontSize: 11, fill: '#e0e0e0' },
-      labelBgStyle: { fill: '#1a1d22' },
-      markerEnd: { type: MarkerType.ArrowClosed, color: hasCondition ? '#f39c12' : '#4a90e2' },
-      interactionWidth: 20,
-    };
-  });
+  return transitions.map((t) => ({
+    id: t.id,
+    source: t.from_step_id,
+    target: t.to_step_id,
+    ...edgeVisual(t.condition, t.priority),
+  }));
 }
 
 function buildNodes(steps: StoryStep[], entryStepId: string | null): Node[] {
@@ -123,7 +112,16 @@ function StoryGraphInner() {
   const [editingTransition, setEditingTransition] = useState<StoryTransition | null>(null);
   const [paneCtxMenu, setPaneCtxMenu] = useState<{ x: number; y: number; flowX: number; flowY: number } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  // Транзиентный тост для не-фатальных ошибок операций (создание/удаление/связи).
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
   const reactFlowWrapperRef = useRef<HTMLDivElement>(null);
+
+  const notifyError = useCallback((msg: string) => {
+    setToast(msg);
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 5000);
+  }, []);
 
   // Дебаунс-таймер сохранения позиций. Пересоздаётся при каждом drag.
   const saveTimerRef = useRef<number | null>(null);
@@ -304,19 +302,32 @@ function StoryGraphInner() {
           kind,
         });
       } catch (err) {
+        const msg = parseApiError(err);
+        notifyError(typeof msg === 'string' ? msg : 'Не удалось создать шаг.');
         logger.warn('admin.story.step_create_failed', 'Failed to create step from palette', {
-          error: parseApiError(err),
+          error: msg,
         });
       }
     },
-    [storyId, reactFlowInstance],
+    [storyId, reactFlowInstance, notifyError],
   );
 
   // ---- 4.2: Connect handles → create transition ----
   const onConnect = useCallback(
     async (connection: Connection) => {
       if (!storyId || !connection.source || !connection.target) return;
-      if (connection.source === connection.target) return; // no self-loops
+      if (connection.source === connection.target) {
+        notifyError('Нельзя соединить шаг сам с собой.');
+        return;
+      }
+      // Запрет дублей: уже есть стрелка из этого шага в тот же.
+      const duplicate = story?.transitions.some(
+        (t) => t.from_step_id === connection.source && t.to_step_id === connection.target,
+      );
+      if (duplicate) {
+        notifyError('Между этими шагами уже есть стрелка в этом направлении.');
+        return;
+      }
 
       try {
         const res = await adminStoriesApi.createTransition(storyId, {
@@ -324,17 +335,11 @@ function StoryGraphInner() {
           to_step_id: connection.target,
         });
         const t = res.data;
-        const hasCondition = t.condition !== null;
         const newEdge: Edge = {
           id: t.id,
           source: t.from_step_id,
           target: t.to_step_id,
-          label: hasCondition ? `[p${t.priority}] cond` : t.priority > 0 ? `p${t.priority}` : undefined,
-          animated: !hasCondition,
-          style: { stroke: hasCondition ? '#f39c12' : '#4a90e2', strokeWidth: 2 },
-          labelStyle: { fontSize: 11, fill: '#e0e0e0' },
-          labelBgStyle: { fill: '#1a1d22' },
-          markerEnd: { type: MarkerType.ArrowClosed, color: hasCondition ? '#f39c12' : '#4a90e2' },
+          ...edgeVisual(t.condition, t.priority),
         };
         setEdges((prev) => addEdge(newEdge, prev));
         setStory((prev) =>
@@ -345,12 +350,14 @@ function StoryGraphInner() {
           transition_id: t.id,
         });
       } catch (err) {
+        const msg = parseApiError(err);
+        notifyError(typeof msg === 'string' ? msg : 'Не удалось создать стрелку.');
         logger.warn('admin.story.transition_create_failed', 'Failed to create transition', {
-          error: parseApiError(err),
+          error: msg,
         });
       }
     },
-    [storyId],
+    [storyId, story, notifyError],
   );
 
   // ---- 4.2: Delete nodes/edges ----
@@ -376,13 +383,15 @@ function StoryGraphInner() {
             step_id: node.id,
           });
         } catch (err) {
+          const msg = parseApiError(err);
+          notifyError(typeof msg === 'string' ? msg : 'Не удалось удалить шаг.');
           logger.warn('admin.story.step_delete_failed', 'Failed to delete step', {
-            error: parseApiError(err),
+            error: msg,
           });
         }
       }
     },
-    [storyId],
+    [storyId, notifyError],
   );
 
   const onEdgesDelete = useCallback(
@@ -401,13 +410,15 @@ function StoryGraphInner() {
             transition_id: edge.id,
           });
         } catch (err) {
+          const msg = parseApiError(err);
+          notifyError(typeof msg === 'string' ? msg : 'Не удалось удалить стрелку.');
           logger.warn('admin.story.transition_delete_failed', 'Failed to delete transition', {
-            error: parseApiError(err),
+            error: msg,
           });
         }
       }
     },
-    [storyId],
+    [storyId, notifyError],
   );
 
   // ---- 4.2: Context menu (right-click) ----
@@ -444,10 +455,12 @@ function StoryGraphInner() {
             : prev,
         );
       } catch (err) {
-        logger.warn('admin.story.step_delete_failed', 'Failed to delete step', { error: parseApiError(err) });
+        const msg = parseApiError(err);
+        notifyError(typeof msg === 'string' ? msg : 'Не удалось удалить шаг.');
+        logger.warn('admin.story.step_delete_failed', 'Failed to delete step', { error: msg });
       }
     },
-    [storyId],
+    [storyId, notifyError],
   );
 
   const handleSetEntry = useCallback(
@@ -463,10 +476,12 @@ function StoryGraphInner() {
           })),
         );
       } catch (err) {
-        logger.warn('admin.story.set_entry_failed', 'Failed to set entry step', { error: parseApiError(err) });
+        const msg = parseApiError(err);
+        notifyError(typeof msg === 'string' ? msg : 'Не удалось назначить стартовый шаг.');
+        logger.warn('admin.story.set_entry_failed', 'Failed to set entry step', { error: msg });
       }
     },
-    [storyId],
+    [storyId, notifyError],
   );
 
   // ---- 4.2: Trash zone on node drag ----
@@ -556,22 +571,11 @@ function StoryGraphInner() {
           transitions: prev.transitions.map((t) => (t.id === updated.id ? updated : t)),
         };
       });
-      // Sync edge visuals
-      const hasCondition = updated.condition !== null;
+      // Sync edge visuals (label/цвет/маркер) через общий хелпер.
       setEdges((prev) =>
         prev.map((e) =>
           e.id === updated.id
-            ? {
-                ...e,
-                label: hasCondition
-                  ? `[p${updated.priority}] cond`
-                  : updated.priority > 0
-                    ? `p${updated.priority}`
-                    : undefined,
-                animated: !hasCondition,
-                style: { stroke: hasCondition ? '#f39c12' : '#4a90e2', strokeWidth: 2 },
-                markerEnd: { type: MarkerType.ArrowClosed, color: hasCondition ? '#f39c12' : '#4a90e2' },
-              }
+            ? { ...e, ...edgeVisual(updated.condition, updated.priority) }
             : e,
         ),
       );
@@ -628,12 +632,14 @@ function StoryGraphInner() {
           prev ? { ...prev, steps: [...prev.steps, step] } : prev,
         );
       } catch (err) {
+        const msg = parseApiError(err);
+        notifyError(typeof msg === 'string' ? msg : 'Не удалось создать шаг.');
         logger.warn('admin.story.step_create_failed', 'Failed to create step from pane menu', {
-          error: parseApiError(err),
+          error: msg,
         });
       }
     },
-    [storyId, paneCtxMenu],
+    [storyId, paneCtxMenu, notifyError],
   );
 
   // ---- 4.2: Edge context menu (right-click on edge) ----
@@ -659,10 +665,12 @@ function StoryGraphInner() {
           prev ? { ...prev, transitions: prev.transitions.filter((t) => t.id !== edgeId) } : prev,
         );
       } catch (err) {
-        logger.warn('admin.story.transition_delete_failed', 'Failed to delete transition', { error: parseApiError(err) });
+        const msg = parseApiError(err);
+        notifyError(typeof msg === 'string' ? msg : 'Не удалось удалить стрелку.');
+        logger.warn('admin.story.transition_delete_failed', 'Failed to delete transition', { error: msg });
       }
     },
-    [storyId],
+    [storyId, notifyError],
   );
 
   // Ручной запуск auto-layout. После раскладки сохраняем позиции в БД.
@@ -716,6 +724,20 @@ function StoryGraphInner() {
 
   return (
     <div className="admin-story-graph">
+      {toast && (
+        <div className="admin-story-graph__toast" role="alert">
+          <AlertTriangle size={14} />
+          <span>{toast}</span>
+          <button
+            type="button"
+            className="admin-story-graph__toast-close"
+            onClick={() => setToast(null)}
+            aria-label="Закрыть"
+          >
+            ×
+          </button>
+        </div>
+      )}
       <header className="admin-story-graph__toolbar">
         <div className="admin-story-graph__title">
           <Link to="/admin/stories" className="admin-btn admin-btn--small">

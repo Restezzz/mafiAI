@@ -5,11 +5,12 @@
  * Позволяет:
  * - Видеть from → to (slug/label шагов)
  * - Редактировать priority
- * - Редактировать condition (JSON)
- * - Очистить condition
+ * - Редактировать condition через структурный конструктор (выбор из списка),
+ *   без ручного ввода JSON
+ * - Очистить condition (безусловный переход)
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import { X, Save, AlertTriangle } from 'lucide-react';
+import { X, Save } from 'lucide-react';
 import {
   adminStoriesApi,
   StoryTransition,
@@ -17,6 +18,8 @@ import {
 } from '../../../api/adminStoriesApi';
 import { logger } from '../../../services/logger';
 import { parseApiError } from '../../../utils/parseApiError';
+import ConditionEditor, { Condition } from '../ConditionEditor';
+import { describeCondition } from './conditionUtils';
 import './StepEditPanel.scss'; // Reuse same panel styles
 
 interface Props {
@@ -35,18 +38,15 @@ export default function EdgeEditPanel({
   onTransitionUpdated,
 }: Props) {
   const [priority, setPriority] = useState(String(transition.priority));
-  const [conditionJson, setConditionJson] = useState(
-    transition.condition ? JSON.stringify(transition.condition, null, 2) : '',
+  const [condition, setCondition] = useState<Condition | null>(
+    (transition.condition as Condition | null) ?? null,
   );
-  const [jsonError, setJsonError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setPriority(String(transition.priority));
-    setConditionJson(
-      transition.condition ? JSON.stringify(transition.condition, null, 2) : '',
-    );
+    setCondition((transition.condition as Condition | null) ?? null);
   }, [transition]);
 
   const fromStep = steps.find((s) => s.id === transition.from_step_id);
@@ -55,38 +55,25 @@ export default function EdgeEditPanel({
   const handleSave = useCallback(async () => {
     setSaving(true);
     setError(null);
-    setJsonError(null);
-
-    let condition: Record<string, unknown> | null = null;
-    let unsetCondition = false;
-
-    if (conditionJson.trim()) {
-      try {
-        condition = JSON.parse(conditionJson.trim());
-      } catch {
-        setJsonError('Невалидный JSON');
-        setSaving(false);
-        return;
-      }
-    } else {
-      unsetCondition = true;
-    }
 
     try {
       const res = await adminStoriesApi.updateTransition(storyId, transition.id, {
         priority: parseInt(priority, 10) || 0,
-        ...(unsetCondition ? { unset_condition: true } : { condition }),
+        ...(condition
+          ? { condition: condition as unknown as Record<string, unknown> }
+          : { unset_condition: true }),
       });
       onTransitionUpdated(res.data);
     } catch (err) {
-      setError('Не удалось сохранить');
+      const msg = parseApiError(err);
+      setError(typeof msg === 'string' ? msg : 'Не удалось сохранить');
       logger.warn('admin.story.transition_update_failed', 'Transition update failed', {
-        error: parseApiError(err),
+        error: msg,
       });
     } finally {
       setSaving(false);
     }
-  }, [storyId, transition.id, priority, conditionJson, onTransitionUpdated]);
+  }, [storyId, transition.id, priority, condition, onTransitionUpdated]);
 
   return (
     <div className="step-edit-panel">
@@ -127,30 +114,19 @@ export default function EdgeEditPanel({
             placeholder="0"
           />
           <span className="step-edit-panel__field-hint">
-            Выше число → проверяется первым
+            Если из шага выходит несколько стрелок — выше число проверяется первым
           </span>
         </div>
 
         <div className="step-edit-panel__field">
-          <label>Condition (JSON)</label>
-          <textarea
-            className="admin-textarea step-edit-panel__json-editor"
-            value={conditionJson}
-            onChange={(e) => {
-              setConditionJson(e.target.value);
-              setJsonError(null);
-            }}
-            placeholder='{"op": "alive_count_le", "args": {"count": 3}}'
-            rows={6}
-          />
-          {jsonError && (
-            <div className="step-edit-panel__cue-warn">
-              <AlertTriangle size={11} />
-              <span>{jsonError}</span>
-            </div>
-          )}
+          <label>Условие перехода</label>
+          <ConditionEditor value={condition} onChange={setCondition} />
           <span className="step-edit-panel__field-hint">
-            Оставьте пустым для безусловного перехода
+            {condition
+              ? `Переход сработает, если: ${describeCondition(
+                  condition as unknown as Record<string, unknown>,
+                )}`
+              : 'Без условия — безусловный переход (fallback). Выберите тип, чтобы добавить условие.'}
           </span>
         </div>
 
