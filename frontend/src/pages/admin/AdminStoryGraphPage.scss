@@ -194,3 +194,44 @@
     transform: translateX(-50%) translateY(0);
   }
 }
+
+// Транзиентный тост ошибок операций (создание/удаление/связи).
+.admin-story-graph__toast {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 520px;
+  padding: 10px 14px;
+  background: #3a1d1d;
+  border: 1px solid #a94442;
+  border-radius: 6px;
+  color: #f4d6d6;
+  font-size: 13px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  animation: trash-appear 0.18s ease-out;
+
+  svg {
+    flex-shrink: 0;
+    color: #e06b6b;
+  }
+}
+
+.admin-story-graph__toast-close {
+  margin-left: 4px;
+  background: none;
+  border: none;
+  color: #f4d6d6;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+
+  &:hover {
+    color: #fff;
+  }
+}

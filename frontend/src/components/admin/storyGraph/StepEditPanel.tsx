@@ -36,6 +36,8 @@ import { parseApiError } from '../../../utils/parseApiError';
 import { API_BASE_URL } from '../../../utils/constants';
 import NamesNodePanel from './NamesNodePanel';
 import RolesNodePanel from './RolesNodePanel';
+import RoleActionPanel from './RoleActionPanel';
+import StepPhasePanel from './StepPhasePanel';
 import './StepEditPanel.scss';
 
 interface Props {
@@ -647,6 +649,9 @@ export default function StepEditPanel({ storyId, step, story, onClose, onStepUpd
   }, [storyId, step, cues, onStepUpdated]);
 
   const isNarration = step.kind === 'narration';
+  const isBranch = step.kind === 'branch';
+  const isRoleAction = step.kind === 'role_action';
+  const phaseEligible = isNarration || isBranch;
 
   const handleDeleteCue = useCallback(
     async (cueId: string) => {
@@ -719,6 +724,14 @@ export default function StepEditPanel({ storyId, step, story, onClose, onStepUpd
 
         <div className="step-edit-panel__divider" />
 
+        {phaseEligible && (
+          <StepPhasePanel
+            storyId={storyId}
+            step={step}
+            onStepUpdated={onStepUpdated}
+          />
+        )}
+
         {step.kind === 'names' ? (
           <NamesNodePanel
             storyId={storyId}
@@ -731,6 +744,18 @@ export default function StepEditPanel({ storyId, step, story, onClose, onStepUpd
             story={story as StoryReadFull}
             onStoryChanged={onStoryChanged}
           />
+        ) : isRoleAction ? (
+          <RoleActionPanel
+            storyId={storyId}
+            step={step}
+            onStepUpdated={onStepUpdated}
+          />
+        ) : isBranch ? (
+          <div className="step-edit-panel__empty">
+            Развилка ничего не делает сама — она лишь точка ветвления. Куда пойти,
+            решают условия на исходящих стрелках (по убыванию приоритета). Задайте
+            условия двойным кликом на стрелках.
+          </div>
         ) : isNarration ? (
         <div className="step-edit-panel__section">
           <div className="step-edit-panel__section-header">
@@ -772,7 +797,8 @@ export default function StepEditPanel({ storyId, step, story, onClose, onStepUpd
         </div>
         ) : (
           <div className="step-edit-panel__empty">
-            Фразы доступны только для шагов типа «narration».
+            Для этого типа шага дополнительных настроек не требуется — он работает
+            по настройкам катки.
           </div>
         )}
       </div>
