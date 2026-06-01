@@ -38,6 +38,7 @@ from services.game_engine import (
     _name_pick_options,
     _player_target_dict,
     acknowledge_role,
+    doctor_self_heal_used,
     get_current_phase,
     resolve_votes,
     start_game,
@@ -249,20 +250,8 @@ async def night_action(
             if prev_heal_target is not None and prev_heal_target == target.id:
                 raise GameError(400, "invalid_target", "Нельзя лечить одного и того же игрока два раунда подряд")
 
-        if target.id == player.id:
-            self_heal_used = await db.scalar(
-                select(NightAction.id)
-                .join(GamePhase, NightAction.phase_id == GamePhase.id)
-                .where(
-                    GamePhase.session_id == session_id,
-                    NightAction.actor_player_id == player.id,
-                    NightAction.action_type == "heal",
-                    NightAction.target_player_id == player.id,
-                )
-                .limit(1)
-            )
-            if self_heal_used is not None:
-                raise GameError(400, "invalid_target", "Себя доктор может вылечить только один раз за игру")
+        if target.id == player.id and await doctor_self_heal_used(db, session_id, player.id):
+            raise GameError(400, "invalid_target", "Себя доктор может вылечить только один раз за игру")
 
     # мафия: первый выбор фиксирует общий
     if action_type == "kill":
@@ -716,10 +705,15 @@ async def state(
                     if p.status == "alive" and p.id != player.id and _team_of(p) != "mafia"
                 ]
             elif night_action == "heal":
+                # Себя доктор может вылечить лишь раз за игру — после этого
+                # убираем себя из списка целей, чтобы не было заведомо
+                # отклоняемого выбора.
+                heal_self_used = await doctor_self_heal_used(db, session_id, player.id)
                 response["available_targets"] = [
                     _player_target_dict(p)
                     for p in all_players
                     if p.status == "alive"
+                    and not (heal_self_used and p.id == player.id)
                 ]
             elif night_action == "check":
                 response["available_targets"] = [

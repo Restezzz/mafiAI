@@ -12,6 +12,7 @@ from services.game_engine import (
     _is_turn_enabled,
     _role_config,
     check_win_condition,
+    doctor_self_heal_used,
 )
 from services.runtime_state import runtime_state
 
@@ -158,3 +159,24 @@ async def test_check_win_no_alive_players():
 
     result = await check_win_condition(db, uuid.uuid4())
     assert result is None
+
+
+# --- doctor_self_heal_used ---
+
+
+@pytest.mark.asyncio
+async def test_doctor_self_heal_used_true():
+    # Найдена прошлая запись heal на себя → доктор уже лечил себя.
+    db = Mock()
+    db.scalar = AsyncMock(return_value=uuid.uuid4())
+
+    assert await doctor_self_heal_used(db, uuid.uuid4(), uuid.uuid4()) is True
+
+
+@pytest.mark.asyncio
+async def test_doctor_self_heal_used_false():
+    # Нет ни одной записи heal на себя → лечить себя ещё можно.
+    db = Mock()
+    db.scalar = AsyncMock(return_value=None)
+
+    assert await doctor_self_heal_used(db, uuid.uuid4(), uuid.uuid4()) is False
