@@ -59,6 +59,18 @@ services:
       OBSERVABILITY_ENABLED: "false"
       # Audio manifest монтируется read-only из repo root (см. volumes ниже).
       AUDIO_MANIFEST_PATH: /audio_manifest.json
+      # Постоянные хранилища mp3 narrator'а и загруженных картинок. Лежат на
+      # named-volume'ах (audio_storage / image_storage), поэтому переживают
+      # пересборку контейнера. Без IMAGE_STORAGE_ROOT дефолт уходит в
+      # /backend/image_storage (вне /app) — non-root юзер app не может туда
+      # писать → 500 на загрузке картинок.
+      AUDIO_STORAGE_ROOT: /app/audio_storage
+      IMAGE_STORAGE_ROOT: /app/image_storage
+      # Идемпотентный сид narrator'а (триггеры + аудиотека) на старте
+      # контейнера. 1 = включён (дефолт), 0 = выключить. Источник mp3 —
+      # /seed_audio (mount ниже), манифест — /audio_manifest.json.
+      SEED_NARRATOR_ON_START: ${SEED_NARRATOR_ON_START:-1}
+      NARRATOR_SEED_AUDIO_DIR: /seed_audio
       # uvicorn: 1 worker по умолчанию — игровое state в памяти, multi-worker
       # без shared state даст рассинхрон. Масштабирование = вертикально.
       UVICORN_WORKERS: ${UVICORN_WORKERS:-1}
@@ -66,6 +78,11 @@ services:
     volumes:
       # audio_manifest.json лежит в корне репы и нужен бэку. read-only mount.
       - ./audio_manifest.json:/audio_manifest.json:ro
+      # Исходные mp3 для разового/идемпотентного сида narrator'а (read-only).
+      - ./frontend/public/audio:/seed_audio:ro
+      # Постоянные тома: скопированные mp3 и загруженные картинки.
+      - audio_storage:/app/audio_storage
+      - image_storage:/app/image_storage
     depends_on:
       db:
         condition: service_healthy
@@ -113,3 +130,7 @@ services:
 volumes:
   postgres_data:
     name: gamemaster_postgres_data_prod
+  audio_storage:
+    name: gamemaster_audio_storage_prod
+  image_storage:
+    name: gamemaster_image_storage_prod

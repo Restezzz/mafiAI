@@ -8,11 +8,17 @@ FROM python:3.12-slim AS base
 
 WORKDIR /app
 
+# HOME / UV_CACHE_DIR: контейнер бежит под non-root юзером app без home-каталога.
+# uv по умолчанию пишет кэш в $HOME/.cache/uv (=/home/app, недоступно) и падает
+# на старте. Указываем кэш и HOME внутрь /app (chown app:app ниже) — иначе
+# entrypoint (uv run alembic / uvicorn) крашится с "Permission denied .cache/uv".
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    HOME=/app \
+    UV_CACHE_DIR=/app/.uv-cache
 
 # Системные зависимости минимальны: curl нужен для healthcheck в compose
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -33,6 +39,12 @@ COPY . .
 
 # Делаем entrypoint исполняемым
 RUN chmod +x /app/entrypoint.sh
+
+# Каталоги-точки монтирования постоянных томов (mp3 narrator'а + картинки).
+# Создаём ДО chown, чтобы named-volume при первом монтировании унаследовал
+# владельца app:app (Docker копирует ownership пустого каталога в новый том).
+# Иначе том создаётся root'ом и non-root процесс не может в него писать → 500.
+RUN mkdir -p /app/audio_storage /app/image_storage
 
 # Пользователь без root-привилегий — даже если в коде RCE, FS не убьёт
 RUN groupadd --system --gid 1001 app \
